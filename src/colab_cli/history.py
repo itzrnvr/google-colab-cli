@@ -36,6 +36,50 @@ class HistoryLogger:
     def _get_log_path(self, session_name: str) -> str:
         return os.path.join(self.log_dir, f"{_safe_log_stem(session_name)}.jsonl")
 
+    def _get_outputs_path(self, session_name: str) -> str:
+        return os.path.join(self.log_dir, f"{_safe_log_stem(session_name)}.outputs.jsonl")
+
+    def store_output(self, session_name: str, output: Dict[str, Any]) -> str:
+        """Persist one FULL kernel output; return its stable fetch ID.
+
+        IDs are per-session monotonically increasing (`o1`, `o2`, ...) and
+        survive process restarts (count derived from the existing file), so
+        a wrapper can `colab output -s NAME o7` in a later command.
+        """
+        path = self._get_outputs_path(session_name)
+        seq = 0
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        seq += 1
+        oid = f"o{seq + 1}"
+        record = {
+            "id": oid,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "output": output,
+        }
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+        return oid
+
+    def get_output(self, session_name: str, oid: str) -> Dict[str, Any]:
+        """Fetch one full output by ID; empty dict when unknown."""
+        path = self._get_outputs_path(session_name)
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("id") == oid:
+                    return record.get("output", {})
+        return {}
+
     def log_event(self, session_name: str, event_type: str, data: Dict[str, Any]):
         """
         Appends a structured event to the session's history file.
@@ -60,7 +104,12 @@ class HistoryLogger:
     def list_sessions(self) -> List[str]:
         if not os.path.exists(self.log_dir):
             return []
-        return [f[:-6] for f in os.listdir(self.log_dir) if f.endswith(".jsonl")]
+        # Skip per-output sidecar files (<name>.outputs.jsonl).
+        return [
+            f[:-6]
+            for f in os.listdir(self.log_dir)
+            if f.endswith(".jsonl") and not f.endswith(".outputs.jsonl")
+        ]
 
     def get_history(self, session_name: str) -> List[Dict[str, Any]]:
         log_path = self._get_log_path(session_name)

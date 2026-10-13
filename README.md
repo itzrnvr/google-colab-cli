@@ -80,16 +80,18 @@ echo "exit=$?"
 
 # Final line is always {"event":"result","ok":…,"exit_code":…,"cells":[...]}.
 # --json alone renders human-readable output plus that envelope line.
-# --max-output-chars N caps per-output size (default 2000, ANSI stripped,
+# --max-output-chars N caps per-preview size (default 2000, ANSI stripped,
 # tracebacks trimmed, images stubbed); full outputs stay in `colab log`.
 colab sessions --json   # arrays, not tables — never scrape human output
 colab status -s job --json
 ```
 
-Context-budget rules the CLI enforces by default in machine output: successful
-outputs droppable via `--errors-only`, per-output caps via `--max-output-chars`,
-image bytes never embedded. A green run costs bytes; failures arrive trimmed
-but complete enough to act on, with full fidelity in history.
+See everything, pay for what you pull: small outputs ride inline, large ones
+arrive as `{"ref": {"id": "o7", "bytes": …, "fetch": "colab output -s job o7"},
+"preview": <trimmed>}` — then `colab output -s job o7` returns the complete
+untruncated output. References are stable across commands. Nothing is hidden;
+context bloat is opt-in per output. `--max-output-chars 0` inlines everything
+with no refs; `--errors-only` drops successes so green runs cost bytes.
 
 ---
 
@@ -133,6 +135,7 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 | `colab drivemount [-s NAME] [PATH]` | Mount Google Drive on the VM (default: `/content/drive`) |
 | `colab install [-s NAME] [-r FILE \| PKG...]` | Install packages on the VM using `uv` (falls back to `pip`) |
 | `colab log [-s NAME] [-n N] [-o FILE]` | View or export session history (`.ipynb`, `.md`, `.txt`, `.jsonl`) |
+| `colab output [-s NAME] ID [--max-chars N]` | Fetch one full stored output by stream reference ID |
 | `colab usage` | Show account compute-unit usage rate and balance |
 | `colab pay` | Open the Colab subscription page to manage compute units |
 | `colab version` | Print the installed version of the CLI |

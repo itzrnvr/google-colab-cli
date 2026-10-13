@@ -336,3 +336,70 @@ def test_agent_guide_prints_handbook():
     assert result.exit_code == 0, result.output
     assert "--stream-jsonl" in result.output
     assert "Machine interface" in result.output
+
+
+def test_large_output_gets_ref_and_fetch_roundtrips(
+    mock_runtime_class, mock_store, mock_common_state, tmp_path, monkeypatch
+):
+    """Over-cap outputs: preview + ref inline, full text via `colab output`."""
+    import colab_cli.common as common_mod
+
+    # Point history at a scratch dir so the registry is isolated.
+    from colab_cli.history import HistoryLogger
+
+    monkeypatch.setattr(
+        common_mod.state, "history", HistoryLogger(log_dir=str(tmp_path))
+    )
+    mock_common_state.resolve_session.return_value = "s1"
+    big_text = "log-line\n" * 1000  # ~9KB, well over the cap
+    _mock_session(
+        mock_store, mock_runtime_class,
+        [{"output_type": "stream", "name": "stdout", "text": big_text}],
+    )
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--stream-jsonl"], input="code()",
+    )
+    assert result.exit_code == 0
+    events = _json_lines(result.stdout)
+    streamed = [e for e in events if e["event"] == "output"][0]
+    assert "ref" in streamed, "over-cap output must carry a fetch ref"
+    ref = streamed["ref"]
+    assert ref["bytes"] > 2000
+    assert ref["fetch"] == f"colab output -s s1 {ref['id']}"
+    # The envelope shares the SAME id (no double-store).
+    envelope = events[-1]
+    cell_out = envelope["cells"][0]["outputs"][0]
+    assert cell_out["ref"]["id"] == ref["id"]
+    # Fetch returns the complete untruncated output.
+    fetch = runner.invoke(app, ["output", "-s", "s1", ref["id"]])
+    assert fetch.exit_code == 0, fetch.output
+    doc = json.loads(fetch.output)
+    assert doc["output"]["text"] == big_text
+
+
+def test_small_output_rides_inline_without_ref(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """Under-cap outputs have no ref — zero fetch overhead."""
+    mock_common_state.resolve_session.return_value = "s1"
+    _mock_session(
+        mock_store, mock_runtime_class,
+        [{"output_type": "stream", "name": "stdout", "text": "hi\n"}],
+    )
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--stream-jsonl"], input="code()",
+    )
+    events = _json_lines(result.stdout)
+    streamed = [e for e in events if e["event"] == "output"][0]
+    assert "ref" not in streamed
+    assert streamed["output"]["text"] == "hi\n"
+
+
+def test_output_fetch_missing_id_fails(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """Unknown IDs exit 1 with the error on stderr (stdout stays parseable)."""
+    mock_common_state.resolve_session.return_value = "s1"
+    result = runner.invoke(app, ["output", "-s", "s1", "o999"])
+    assert result.exit_code == 1
+    assert result.stdout == ""

@@ -336,22 +336,54 @@ def exec_command(
                     return compact_output(o, max_chars=max_output_chars)
                 return o
 
+            # Output object id -> ref, so the stream hook and the final
+            # envelope share one fetch ID per output instead of storing twice.
+            _refs = {}
+
+            def _compact_ref(o):
+                """Compact one output; store + reference it when over budget.
+
+                Returns (compacted, ref-or-None). Under the size cap the
+                output rides inline with no ref. Over it, the FULL output
+                is persisted via history and the event carries a compacted
+                preview plus {"id", "bytes", "fetch"} to pull the whole thing
+                with `colab output -s NAME ID`. Nothing is hidden — large
+                content is one fetch away instead of inline.
+                """
+                key = id(o)
+                if key in _refs:
+                    return _refs[key]
+                raw_bytes = len(json.dumps(o))
+                cap = max_output_chars if max_output_chars and max_output_chars > 0 else 2000
+                if raw_bytes <= cap:
+                    _refs[key] = (o, None)
+                    return o, None
+                oid = state.history.store_output(name, o)
+                ref = {
+                    "id": oid,
+                    "bytes": raw_bytes,
+                    "fetch": f"colab output -s {name} {oid}",
+                }
+                pair = (_compact(o), ref)
+                _refs[key] = pair
+                return pair
+
             def _hook(o, _i=i, _id=identifier):
                 if stream_jsonl:
                     if errors_only and o.get("output_type") != "error":
                         return
-                    # Instant feedback: the error/traceback line hits the
-                    # wrapper's stdout the moment the kernel emits it.
-                    # Compacted by default so long tracebacks/logs don't
-                    # bloat the wrapper's context; full outputs stay in
-                    # history (`colab log`) for deep dives.
+                    # Reference semantics: small outputs ride inline; large
+                    # ones are stored whole and referenced by ID so the agent
+                    # sees everything but pays for what it pulls.
+                    compacted, ref = _compact_ref(o)
                     _emit(
                         {
                             "event": "output",
                             "session": name,
                             "cell_index": _i,
                             "cell_id": _id,
-                            "output": _compact(o),
+                            "output": compacted,
+                            **({"ref": ref} if ref else {}),
                         }
                     )
                 else:
@@ -365,11 +397,15 @@ def exec_command(
             cell_failed = any(o.get("output_type") == "error" for o in outputs)
             if cell_failed:
                 exec_exit = 1
-            machine_outputs = [
-                _compact(o)
-                for o in outputs
-                if not errors_only or o.get("output_type") == "error"
-            ]
+            machine_outputs = []
+            for o in outputs:
+                if errors_only and o.get("output_type") != "error":
+                    continue
+                compacted, ref = _compact_ref(o)
+                if ref:
+                    machine_outputs.append({"ref": ref, "preview": compacted})
+                else:
+                    machine_outputs.append(compacted)
             results.append(
                 {
                     "cell_index": i,

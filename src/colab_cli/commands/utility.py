@@ -206,6 +206,47 @@ def log(
                 typer.echo(f"[{ts}] EVENT: {etype}")
 
 
+def output(
+    output_id: Annotated[
+        str, typer.Argument(help="Output ID from a stream event or envelope (e.g. o3)")
+    ],
+    session: Annotated[
+        Optional[str], typer.Option("-s", "--session", help="Session name")
+    ] = None,
+    max_chars: Annotated[
+        int,
+        typer.Option(
+            "--max-chars",
+            help="Cap returned text at this many chars (0 = no cap).",
+        ),
+    ] = 0,
+):
+    """Fetch one full stored output by ID.
+
+    Machine-mode exec/run streams carry small outputs inline and store large
+    ones by reference ({"ref": {"id", "bytes", "fetch"}}). This command
+    pulls the complete, untruncated output so agents see everything while
+    paying context only for what they actually fetch. Emits JSON on stdout.
+    """
+    from colab_cli.common import state as _state
+
+    name = _state.resolve_session(session)
+    doc = _state.history.get_output(name, output_id)
+    if not doc:
+        typer.echo(
+            f"[colab] No output '{output_id}' stored for session '{name}'.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    if max_chars and max_chars > 0:
+        from colab_cli.utils import compact_output
+
+        doc = compact_output(doc, max_chars=max_chars)
+    import json as _json
+
+    typer.echo(_json.dumps({"id": output_id, "session": name, "output": doc}))
+
+
 def whoami():
     """[debug] Print the active credentials' identity, scopes, and expiry.
 
@@ -400,6 +441,7 @@ def agent_guide():
 def register(app: typer.Typer):
     app.command()(pay)
     app.command()(log)
+    app.command()(output)
     app.command(name="url")(url)
     app.command(name="version")(version_command)
     app.command(name="update")(update_command)

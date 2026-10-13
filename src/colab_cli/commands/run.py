@@ -471,10 +471,32 @@ def run_command(
                     return compact_output(o, max_chars=max_output_chars)
                 return o
 
+            _refs = {}
+
+            def _compact_ref(o):
+                key = id(o)
+                if key in _refs:
+                    return _refs[key]
+                raw_bytes = len(json.dumps(o))
+                cap = max_output_chars if max_output_chars and max_output_chars > 0 else 2000
+                if raw_bytes <= cap:
+                    _refs[key] = (o, None)
+                    return o, None
+                oid = state.history.store_output(name, o)
+                ref = {
+                    "id": oid,
+                    "bytes": raw_bytes,
+                    "fetch": f"colab output -s {name} {oid}",
+                }
+                pair = (_compact(o), ref)
+                _refs[key] = pair
+                return pair
+
             def _run_hook(o):
                 if stream_jsonl:
                     if errors_only and o.get("output_type") != "error":
                         return
+                    compacted, ref = _compact_ref(o)
                     sys.stdout.write(
                         "\n"
                         + json.dumps(
@@ -482,7 +504,8 @@ def run_command(
                                 "event": "output",
                                 "session": name,
                                 "cell_index": 0,
-                                "output": _compact(o),
+                                "output": compacted,
+                                **({"ref": ref} if ref else {}),
                             }
                         )
                         + "\n"
@@ -510,11 +533,15 @@ def run_command(
                 {"code": payload, "outputs": outputs, "via": "run"},
             )
             if machine:
-                machine_outputs = [
-                    _compact(o)
-                    for o in outputs
-                    if not errors_only or o.get("output_type") == "error"
-                ]
+                machine_outputs = []
+                for o in outputs:
+                    if errors_only and o.get("output_type") != "error":
+                        continue
+                    compacted, ref = _compact_ref(o)
+                    if ref:
+                        machine_outputs.append({"ref": ref, "preview": compacted})
+                    else:
+                        machine_outputs.append(compacted)
                 sys.stdout.write(
                     "\n"
                     + json.dumps(
