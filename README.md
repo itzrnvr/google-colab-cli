@@ -66,9 +66,12 @@ Point the agent at the CLI — it is self-describing. The onboarding order is:
 
 1. `colab agent-guide` — one-page operator handbook (auth, sessions, machine
    output, context budgeting, safety, recovery). Same content as `colab skill`.
-2. `colab <command> --help` — every command documents its own flags; `exec`
+2. `docs/agent-training.md` — training & experiment playbook: provision →
+   environment → launch → monitor → checkpoint → retrieve → stop, with kept
+   sessions vs one-shot `run`, long-run timeouts, and recovery.
+3. `colab <command> --help` — every command documents its own flags; `exec`
    and `run` document the full machine interface inline.
-3. `colab --help` — alphabetical command listing.
+4. `colab --help` — alphabetical command listing.
 
 The wrapper recipe:
 
@@ -218,6 +221,7 @@ For comprehensive architectural overviews and deep-dives into specific CLI sub-s
 * [File Management & Jupyter Contents API](docs/03_file_management.md)
 * [Authentication Providers & VM Automation](docs/04_automation_and_utility.md)
 * [Ephemeral Job Runner Design](docs/05_run_command.md)
+* [Agent Training & Experiment Playbook](docs/agent-training.md)
 
 To view interactive walkthroughs of eleven real-world automated scenarios, check out the [Demo Walkthroughs](docs/demos.md).
 

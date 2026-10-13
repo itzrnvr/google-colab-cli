@@ -433,7 +433,9 @@ def agent_guide():
 
     Start here when driving this CLI from a program or AI agent: auth,
     session lifecycle, the machine-readable execution interface, context
-    budgeting, safety, and recovery — one page, no guessing.
+    budgeting, safety, and recovery — one page, no guessing. For full
+    training jobs and experiment sweeps, continue with
+    docs/agent-training.md (linked from the handbook).
     """
     _print_resource("SKILL.md")
 

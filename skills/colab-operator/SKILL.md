@@ -90,6 +90,14 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
 - **Isolate parallel/agent runs** with the global `--config <path>` flag to point session state at a scratch file (e.g. `colab --config /tmp/agent.json new -s job`).
 
+## Full training & experiments
+- For training jobs and experiment sweeps, follow `docs/agent-training.md`:
+  provision → environment → launch → monitor → checkpoint → retrieve → stop.
+  Key points: kept sessions for inspectable long runs vs `colab run` for
+  self-cleaning one-shots; `--timeout` for long waits (or background launch +
+  probe); download checkpoints BEFORE `stop`; `restart-kernel` before
+  stop+recreate on wedges.
+
 ## Recovery
 - "Session not found" / 404 / 401 on exec: the backend pruned the VM. `colab exec`/`repl` detect this and clean up local state automatically — run `colab sessions` and re-create with `colab new`.
 - Execution timeout or wedged kernel: `colab restart-kernel -s <name>` (keeps the VM, resets the kernel), or `colab stop` then `colab new`.
