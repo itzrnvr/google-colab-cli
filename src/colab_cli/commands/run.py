@@ -52,7 +52,7 @@ from colab_cli.commands.execution import _build_env_prelude, _parse_env_vars
 from colab_cli.commands.session import resolve_runtime_options
 from colab_cli.runtime import ColabRuntime
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code, is_terminal_error
+from colab_cli.utils import compact_output, get_status_code, is_terminal_error
 
 
 def _build_script_payload(
@@ -289,6 +289,20 @@ def run_command(
             ),
         ),
     ] = False,
+    errors_only: Annotated[
+        bool,
+        typer.Option(
+            "--errors-only",
+            help="In machine output, keep only error outputs (plus envelope).",
+        ),
+    ] = False,
+    max_output_chars: Annotated[
+        int,
+        typer.Option(
+            "--max-output-chars",
+            help="Cap per-output text in machine output; 0 disables. Default 2000.",
+        ),
+    ] = 2000,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -298,6 +312,12 @@ def run_command(
 
     so a single executable .py file can rent a GPU, run, and clean up after
     itself.
+
+    For programs/agents: --stream-jsonl emits one JSON object per kernel
+    message as it arrives (instant failure signal), --errors-only keeps
+    just failures, --json appends a final result envelope. Exit code
+    follows CPython conventions (uncaught exception -> 1, sys.exit(N)
+    -> N). See `colab agent-guide`.
     """
     from colab_cli.common import state
 
@@ -446,15 +466,23 @@ def run_command(
             machine = json_output or stream_jsonl
             base_hook = _make_run_output_hook()
 
+            def _compact(o):
+                if max_output_chars and max_output_chars > 0:
+                    return compact_output(o, max_chars=max_output_chars)
+                return o
+
             def _run_hook(o):
                 if stream_jsonl:
+                    if errors_only and o.get("output_type") != "error":
+                        return
                     sys.stdout.write(
-                        json.dumps(
+                        "\n"
+                        + json.dumps(
                             {
                                 "event": "output",
                                 "session": name,
                                 "cell_index": 0,
-                                "output": o,
+                                "output": _compact(o),
                             }
                         )
                         + "\n"
@@ -482,14 +510,20 @@ def run_command(
                 {"code": payload, "outputs": outputs, "via": "run"},
             )
             if machine:
+                machine_outputs = [
+                    _compact(o)
+                    for o in outputs
+                    if not errors_only or o.get("output_type") == "error"
+                ]
                 sys.stdout.write(
-                    json.dumps(
+                    "\n"
+                    + json.dumps(
                         {
                             "event": "result",
                             "session": name,
                             "ok": exit_code == 0,
                             "exit_code": exit_code,
-                            "outputs": outputs,
+                            "outputs": machine_outputs,
                         }
                     )
                     + "\n"

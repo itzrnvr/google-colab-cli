@@ -39,7 +39,13 @@ class AlphabeticalGroup(TyperGroup):
 
 
 app = typer.Typer(
-    help="Colab CLI",
+    help=(
+        "Colab CLI: rent Colab VMs and run code on them.\n\n"
+        "Humans: `colab new`, `colab exec -f job.py`, `colab stop`.\n"
+        "Agents/programs: run `colab agent-guide` first — one page covering "
+        "auth, sessions, machine-readable execution (--json/--stream-jsonl), "
+        "and context budgeting. Prefer `--json` flags over scraping tables."
+    ),
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
     cls=AlphabeticalGroup,

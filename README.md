@@ -7,7 +7,7 @@ Designed to support seamless developer productivity, headless automation, and AI
 [Demo](https://github.com/user-attachments/assets/656226a9-af13-4fdb-8eda-d7de747336a2)
 
 > [!NOTE]
-> **Platform support:** the Colab CLI currently supports **Linux and macOS** only. Windows is not supported at this time.
+> **Platform support:** this fork supports **Windows** in addition to Linux and macOS. Windows specifics (console backend, `ProxyCommand` quoting, temp files, UTF-8 reads) are handled natively; use Windows Terminal for the best interactive experience.
 
 > [!TIP]
 > Looking for in-notebook, interactive agent-assisted coding instead of a terminal workflow? See the [Colab MCP Server](https://github.com/googlecolab/colab-mcp).
@@ -58,6 +58,38 @@ colab stop
 > When only one session is active, you can omit the `-s, --session` option;
 > the CLI automatically knows it.
 
+---
+
+## For AI Agents & Programs
+
+Point the agent at the CLI — it is self-describing. The onboarding order is:
+
+1. `colab agent-guide` — one-page operator handbook (auth, sessions, machine
+   output, context budgeting, safety, recovery). Same content as `colab skill`.
+2. `colab <command> --help` — every command documents its own flags; `exec`
+   and `run` document the full machine interface inline.
+3. `colab --help` — alphabetical command listing.
+
+The wrapper recipe:
+
+```bash
+# Stream one JSON object per kernel message; errors surface instantly.
+# A failed cell exits 1, so check the exit code first.
+colab exec -s job --stream-jsonl --errors-only -f job.py
+echo "exit=$?"
+
+# Final line is always {"event":"result","ok":…,"exit_code":…,"cells":[...]}.
+# --json alone renders human-readable output plus that envelope line.
+# --max-output-chars N caps per-output size (default 2000, ANSI stripped,
+# tracebacks trimmed, images stubbed); full outputs stay in `colab log`.
+colab sessions --json   # arrays, not tables — never scrape human output
+colab status -s job --json
+```
+
+Context-budget rules the CLI enforces by default in machine output: successful
+outputs droppable via `--errors-only`, per-output caps via `--max-output-chars`,
+image bytes never embedded. A green run costs bytes; failures arrive trimmed
+but complete enough to act on, with full fidelity in history.
 
 ---
 
@@ -78,10 +110,11 @@ Run `colab <command> --help` to view specific options, defaults, and detailed he
 ### Execution
 | Command | Description |
 | --- | --- |
-| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
-| `colab exec [-s NAME] [-f FILE] [--output-image PATH]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
+| `colab run [--gpu GPU] [--tpu TPU] [--high-mem] [--keep] [--json] [--stream-jsonl] [--errors-only] [--max-output-chars N] SCRIPT [ARGS...]` | Run a local script on a fresh VM, forwarding arguments, then release it |
+| `colab exec [-s NAME] [-f FILE] [--output-image PATH] [--json] [--stream-jsonl] [--errors-only] [--max-output-chars N]` | Execute Python code from stdin, a local `.py` file, or a `.ipynb` notebook |
 | `colab repl [-s NAME] [--output-image PATH]` | Start an interactive Python REPL on the VM (exits cleanly on piped EOF) |
 | `colab console [-s NAME]` | Connect to a raw interactive TTY shell (tmux) on the remote VM |
+| `colab agent-guide` | Print the one-page agent operator handbook (same as `colab skill`) |
 | `colab ssh [-s NAME] [--proxy-mode] [-i KEY] [--gpu GPU] [--tpu TPU] [--high-mem]` | Open an SSH shell to the runtime over WebSocket, or act as an OpenSSH `ProxyCommand` bridge for IDE remote-dev |
 
 ### File Operations

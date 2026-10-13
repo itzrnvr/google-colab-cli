@@ -37,6 +37,16 @@ from colab_cli.cli import app
 runner = CliRunner()
 
 
+def _json_lines(text: str):
+    """Parse line-delimited JSON, skipping blank separator lines.
+
+    The CLI prefixes each JSON object with a newline guard so an envelope
+    never glues onto unterminated kernel stream text; wrappers must parse
+    the same tolerant way.
+    """
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
 def _mock_session(store, runtime_class, code_outputs):
     sess = MagicMock()
     sess.name = "s1"
@@ -68,7 +78,7 @@ def test_exec_json_envelope_ok(mock_runtime_class, mock_store, mock_common_state
     )
     result = runner.invoke(app, ["exec", "-s", "s1", "--json"], input="print('hi')")
     assert result.exit_code == 0, result.output
-    # Kernel stream text renders human-readable; the FINAL line is the envelope.
+    # Kernel stream text renders human-readable; only the FINAL line is JSON.
     envelope = json.loads(result.stdout.strip().splitlines()[-1])
     assert envelope["event"] == "result"
     assert envelope["ok"] is True
@@ -87,7 +97,7 @@ def test_exec_json_envelope_failure(mock_runtime_class, mock_store, mock_common_
     )
     result = runner.invoke(app, ["exec", "-s", "s1", "--json"], input="raise ValueError")
     assert result.exit_code == 1
-    envelope = json.loads(result.stdout.strip().splitlines()[-1])
+    envelope = _json_lines(result.stdout)[-1]
     assert envelope["event"] == "result"
     assert envelope["ok"] is False
     assert envelope["cells"][0]["ok"] is False
@@ -107,7 +117,7 @@ def test_exec_stream_jsonl_instant_error(
         app, ["exec", "-s", "s1", "--stream-jsonl"], input="code()"
     )
     assert result.exit_code == 1
-    events = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    events = _json_lines(result.stdout)
     streamed = [e for e in events if e["event"] == "output"]
     assert len(streamed) == 2
     assert streamed[1]["output"]["ename"] == "RuntimeError"
@@ -228,3 +238,101 @@ def test_uv_tool_detect_windows_path(monkeypatch):
     assert auto_update._get_install_command() == (
         "pip install --upgrade google-colab-cli"
     )
+
+
+def test_compact_strips_ansi_and_trims_traceback():
+    """Tracebacks lose escapes and middle frames; exception line survives."""
+    from colab_cli.utils import compact_output
+
+    tb = ["\x1b[0;31m---header---\x1b[0m"]
+    tb += [f"frame {i}: File x, line {i}" for i in range(30)]
+    tb.append("\x1b[0;31mValueError\x1b[0m: bad")
+    out = compact_output(
+        {"output_type": "error", "ename": "ValueError", "evalue": "bad",
+         "traceback": tb},
+        max_chars=2000,
+    )
+    joined = "\n".join(out["traceback"])
+    assert "\x1b" not in joined
+    assert "ValueError: bad" in joined or "ValueError" in joined
+    assert out.get("truncated") is True
+    assert len(joined) <= 2000
+
+
+def test_compact_stream_tail_cap():
+    """Long streams keep the tail (where the newest log lines are)."""
+    from colab_cli.utils import compact_output
+
+    text = "".join(f"line {i}\n" for i in range(1000))
+    out = compact_output(
+        {"output_type": "stream", "name": "stdout", "text": text},
+        max_chars=200,
+    )
+    assert out.get("truncated") is True
+    assert out["text"].endswith("line 999\n")
+    assert len(out["text"]) <= 200
+
+
+def test_compact_drops_image_bytes():
+    """Base64 payloads never reach the wrapper; text survives."""
+    from colab_cli.utils import compact_output
+
+    out = compact_output(
+        {"output_type": "display_data",
+         "data": {"image/png": "a" * 5000, "text/plain": "plot desc"}},
+    )
+    assert "a" * 100 not in json.dumps(out["data"])
+    assert out["data"]["text/plain"] == "plot desc"
+    assert "bytes omitted" in out["data"]["image/png"]
+
+
+def test_exec_errors_only_drops_success(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """--errors-only: green outputs vanish from stream AND envelope."""
+    mock_common_state.resolve_session.return_value = "s1"
+    _mock_session(
+        mock_store,
+        mock_runtime_class,
+        [
+            {"output_type": "stream", "name": "stdout", "text": "ok\n"},
+            {"output_type": "error", "ename": "E", "evalue": "bad"},
+        ],
+    )
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--stream-jsonl", "--errors-only"],
+        input="code()",
+    )
+    assert result.exit_code == 1
+    events = _json_lines(result.stdout)
+    streamed = [e for e in events if e["event"] == "output"]
+    assert len(streamed) == 1
+    assert streamed[0]["output"]["output_type"] == "error"
+    envelope = events[-1]
+    assert len(envelope["cells"][0]["outputs"]) == 1
+
+
+def test_exec_errors_only_green_run_is_tiny(
+    mock_runtime_class, mock_store, mock_common_state
+):
+    """Green run + --errors-only: envelope carries zero outputs."""
+    mock_common_state.resolve_session.return_value = "s1"
+    _mock_session(
+        mock_store, mock_runtime_class,
+        [{"output_type": "stream", "name": "stdout", "text": "x" * 5000}],
+    )
+    result = runner.invoke(
+        app, ["exec", "-s", "s1", "--json", "--errors-only"], input="code()",
+    )
+    assert result.exit_code == 0
+    envelope = json.loads(result.stdout.strip().splitlines()[-1])
+    assert envelope["cells"][0]["outputs"] == []
+    assert len(result.stdout) < 6000
+
+
+def test_agent_guide_prints_handbook():
+    """`colab agent-guide` surfaces the operator handbook."""
+    result = runner.invoke(app, ["agent-guide"])
+    assert result.exit_code == 0, result.output
+    assert "--stream-jsonl" in result.output
+    assert "Machine interface" in result.output

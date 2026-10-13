@@ -387,6 +387,16 @@ def skill():
     _print_resource("SKILL.md")
 
 
+def agent_guide():
+    """Print the agent operator handbook (same content as `colab skill`).
+
+    Start here when driving this CLI from a program or AI agent: auth,
+    session lifecycle, the machine-readable execution interface, context
+    budgeting, safety, and recovery — one page, no guessing.
+    """
+    _print_resource("SKILL.md")
+
+
 def register(app: typer.Typer):
     app.command()(pay)
     app.command()(log)
@@ -400,3 +410,4 @@ def register(app: typer.Typer):
     app.command(name="README", hidden=True)(readme)
     app.command(name="skill")(skill)
     app.command(name="SKILL", hidden=True)(skill)
+    app.command(name="agent-guide")(agent_guide)

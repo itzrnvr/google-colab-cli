@@ -15,6 +15,7 @@
 import base64
 import html2text
 import logging
+import re
 import sys
 import tempfile
 
@@ -107,3 +108,62 @@ def handle_image(image_b64: str, mime_type: str = "image/png", target_path: str 
         tmp.write(image_bytes)
         tmp.close()
         print(f"\n[Image saved to: {tmp.name}]")
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[78>=<]")
+
+
+def strip_ansi(text: str) -> str:
+    """Remove terminal escape sequences (colors, cursor, charset selects)."""
+    return _ANSI_RE.sub("", text)
+
+
+def compact_output(output: dict, max_chars: int = 2000) -> dict:
+    """Return a context-cheap copy of one kernel output message.
+
+    - Tracebacks: ANSI stripped, frames collapsed to stripped lines, capped
+      at header + last 10 lines (the exception line + cause sit at the tail).
+    - Streams: ANSI stripped, capped at ``max_chars`` from the tail.
+    - Images/data: base64 payloads dropped, replaced by a short summary
+      (the bytes are already saved to disk by ``handle_image``).
+    The returned dict is always JSON-serializable and marked when truncated.
+    """
+    out = dict(output)
+    otype = out.get("output_type")
+    if otype == "error":
+        tb = [strip_ansi(line) for line in out.get("traceback", [])]
+        frames = [line.strip() for line in tb if line.strip()]
+        kept = ([frames[0]] if frames else []) + frames[-10:]
+        text = "\n".join(kept)
+        if len(text) > max_chars:
+            text = text[-max_chars:]
+            out["truncated"] = True
+        elif len(kept) < len(frames):
+            out["truncated"] = True
+        out["traceback"] = text.splitlines()
+        out["ename"] = out.get("ename", "Error")
+        out["evalue"] = (out.get("evalue", "") or "")[:500]
+    elif otype == "stream":
+        text = strip_ansi(out.get("text", ""))
+        if len(text) > max_chars:
+            text = text[-max_chars:]
+            out["truncated"] = True
+        out["text"] = text
+    elif "data" in out:
+        data = out.get("data", {})
+        summary = {}
+        for key in ("text/plain", "text/markdown", "text/html"):
+            if key in data:
+                val = data[key]
+                if isinstance(val, list):
+                    val = "".join(val)
+                val = strip_ansi(str(val))
+                if len(val) > max_chars:
+                    val = val[-max_chars:]
+                    out["truncated"] = True
+                summary[key] = val
+        for key in data:
+            if key.startswith("image/"):
+                summary[key] = "<image saved to disk; bytes omitted>"
+        out["data"] = summary
+    return out

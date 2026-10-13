@@ -26,7 +26,7 @@ from typing import List, Optional
 from typing_extensions import Annotated
 
 from colab_cli.runtime import ColabRuntime
-from colab_cli.utils import handle_image, is_terminal_error, render_display_data
+from colab_cli.utils import compact_output, handle_image, is_terminal_error, render_display_data
 from colab_cli.console import connect_console
 
 _console = Console()
@@ -185,14 +185,50 @@ def exec_command(
             ),
         ),
     ] = False,
+    errors_only: Annotated[
+        bool,
+        typer.Option(
+            "--errors-only",
+            help=(
+                "Context saver for agents: in --json/--stream-jsonl output, "
+                "drop successful stream/text outputs and keep only error "
+                "outputs (plus the final envelope). A green run then costs "
+                "a few dozen bytes instead of the full log."
+            ),
+        ),
+    ] = False,
+    max_output_chars: Annotated[
+        int,
+        typer.Option(
+            "--max-output-chars",
+            help=(
+                "Cap per-output text in machine output (tracebacks, streams) "
+                "at this many chars from the tail; ANSI escapes stripped, "
+                "image bytes replaced by a stub. Default 2000, 0 disables."
+            ),
+        ),
+    ] = 2000,
 ):
-    """Execute code in a session"""
+    """Execute code in a session.
+
+    Reads code from -f/--file (.py or .ipynb) or piped stdin, sends it to
+    the session kernel, and streams outputs back. A failing cell exits 1.
+
+    For programs/agents: add --stream-jsonl for one JSON object per kernel
+    message as it arrives (errors surface instantly, no re-polling), plus
+    --errors-only to drop successful outputs and --max-output-chars to cap
+    per-output size. --json appends a final {"event":"result",...} envelope.
+    See `colab agent-guide` for the full machine-interface contract.
+    """
     from colab_cli.common import state
 
     machine = json_output or stream_jsonl
 
     def _emit(obj) -> None:
-        sys.stdout.write(json.dumps(obj) + "\n")
+        # Kernel stream text may not end in "\n" (e.g. progress writes);
+        # without this guard the envelope would glue onto the partial line
+        # and break line-delimited parsing for wrappers.
+        sys.stdout.write("\n" + json.dumps(obj) + "\n")
         sys.stdout.flush()
 
     def _chatter(msg: str) -> None:
@@ -295,17 +331,27 @@ def exec_command(
             )
             state.store.add(s)
 
+            def _compact(o):
+                if max_output_chars and max_output_chars > 0:
+                    return compact_output(o, max_chars=max_output_chars)
+                return o
+
             def _hook(o, _i=i, _id=identifier):
                 if stream_jsonl:
+                    if errors_only and o.get("output_type") != "error":
+                        return
                     # Instant feedback: the error/traceback line hits the
                     # wrapper's stdout the moment the kernel emits it.
+                    # Compacted by default so long tracebacks/logs don't
+                    # bloat the wrapper's context; full outputs stay in
+                    # history (`colab log`) for deep dives.
                     _emit(
                         {
                             "event": "output",
                             "session": name,
                             "cell_index": _i,
                             "cell_id": _id,
-                            "output": o,
+                            "output": _compact(o),
                         }
                     )
                 else:
@@ -319,13 +365,18 @@ def exec_command(
             cell_failed = any(o.get("output_type") == "error" for o in outputs)
             if cell_failed:
                 exec_exit = 1
+            machine_outputs = [
+                _compact(o)
+                for o in outputs
+                if not errors_only or o.get("output_type") == "error"
+            ]
             results.append(
                 {
                     "cell_index": i,
                     "cell_id": block.get("id"),
                     "identifier": identifier,
                     "ok": not cell_failed,
-                    "outputs": outputs,
+                    "outputs": machine_outputs if machine else outputs,
                 }
             )
             if "cell" in block:

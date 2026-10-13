@@ -75,7 +75,14 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - `colab log -s <name> [-n 20] [-t TYPE]` shows recent structured events; invaluable when a task fails.
 - `colab log -s <name> -o summary.ipynb` exports the session as a notebook (also `.md`, `.txt`, `.jsonl` by suffix).
 - `colab url -s <name>` prints a browser URL that attaches the Colab web UI to your existing CLI session instead of allocating a new VM (add `--open` to launch it).
-- `colab skill` / `colab readme` print this skill and the README (handy for self-discovery).
+- `colab skill` / `colab readme` / `colab agent-guide` print this skill, the README, and the agent handbook (handy for self-discovery).
+
+### Machine interface (for programs and agents)
+- **Default recipe**: `colab exec -s <name> --stream-jsonl --errors-only -f job.py`. Each kernel message arrives as one `{"event":"output",...}` JSON line the moment it is emitted — an `error` output is your instant failure signal, no re-polling. A failed cell exits the command **1** (success: 0), so key on the exit code first, parse the stream second.
+- `--json` (without `--stream-jsonl`) renders outputs human-readable but appends a final `{"event":"result","ok":…,"exit_code":…,"cells":[...]}` envelope line; all `[colab]` chatter moves to stderr so stdout stays parseable.
+- **Context budget**: machine output is compacted by default — ANSI color escapes stripped, tracebacks trimmed to header + last 10 lines, image base64 replaced by a stub (bytes are saved to disk), each output capped at `--max-output-chars` (default 2000, tail-kept, `0` disables). `--errors-only` drops successful outputs entirely: a green run costs bytes, not pages. Full-fidelity outputs always remain in `colab log` / history JSONL for deep dives.
+- `colab sessions --json` and `colab status [-s N] --json` emit arrays/objects instead of tables — prefer them over scraping human output.
+- `colab exec` exits 1 when any cell raises (no SystemExit code mapping — use `colab run` when you need the script's numeric exit code).
 
 ## Safety
 - **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.
