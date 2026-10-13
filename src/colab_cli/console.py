@@ -18,6 +18,7 @@ import os
 import signal
 import sys
 import threading
+from typing import Optional
 import time
 
 try:
@@ -85,6 +86,49 @@ def send_terminal_size(ws):
         logger.debug(f"Failed to send terminal size: {e}")
 
 
+def _read_windows_key() -> Optional[str]:
+    """Read one keystroke on Windows without waiting for Enter.
+
+    Uses msvcrt.getwch so arrow keys arrive as two-char sequences, matching
+    the per-keystroke contract the remote tmux-wrapped shell expects.
+    Returns None when msvcrt is unavailable (non-Windows caller bug).
+    """
+    try:
+        import msvcrt
+    except ImportError:
+        return None
+    ch = msvcrt.getwch()
+    if ch in ("\x00", "\xe0"):
+        # Extended key (arrows/F-keys): prepend ESC so the remote side gets
+        # a CSI-style sequence start.
+        ch += msvcrt.getwch()
+    return ch
+
+
+def _use_msvcrt(is_tty: bool) -> bool:
+    """Select the Windows key-reader backend (msvcrt vs line-buffered stdin).
+
+    Separate function so tests can force either path regardless of platform.
+    """
+    return bool(is_tty and sys.platform == "win32")
+
+
+def _windows_resize_poller(ws, stop: threading.Event):
+    """Poll os.get_terminal_size and forward changes (no SIGWINCH on Windows)."""
+    last = None
+    while not stop.wait(0.25):
+        try:
+            size = os.get_terminal_size()
+        except OSError:
+            continue
+        if size != last:
+            last = size
+            try:
+                send_terminal_size(ws)
+            except Exception:
+                pass
+
+
 def on_open(ws):
     """Callback for when the websocket connection is opened."""
     global _is_running
@@ -96,10 +140,25 @@ def on_open(ws):
     # Setup the background thread to read from stdin
     def read_stdin():
         is_tty = sys.stdin.isatty()
+        # Indirected through _use_msvcrt() so tests can force either backend.
+        use_msvcrt = _use_msvcrt(is_tty)
+        stop_poll = threading.Event()
+        poller = None
+        if use_msvcrt:
+            # No SIGWINCH on Windows: poll for resizes instead.
+            poller = threading.Thread(
+                target=_windows_resize_poller, args=(ws, stop_poll), daemon=True
+            )
+            poller.start()
         while _is_running:
             try:
                 # Read a single character (or escape sequence byte)
-                char = sys.stdin.read(1)
+                if use_msvcrt:
+                    char = _read_windows_key()
+                    if char is None:  # pragma: no cover - msvcrt missing
+                        break
+                else:
+                    char = sys.stdin.read(1)
                 if not char:
                     if not is_tty:
                         # Piped input has reached EOF. The remote /colab/tty
@@ -122,6 +181,7 @@ def on_open(ws):
                 ws.send(json.dumps({"data": char}))
             except Exception:
                 break
+        stop_poll.set()
 
     thread = threading.Thread(target=read_stdin, daemon=True)
     thread.start()

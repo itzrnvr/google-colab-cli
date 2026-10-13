@@ -309,12 +309,18 @@ def test_bridge_proxy_mode_pumps_stdin_to_ws(mocker):
 def test_proxy_command_round_trips_through_the_shell(name, identity):
     """The ProxyCommand string must re-parse into the exact argv.
 
-    `ssh` hands the ProxyCommand to /bin/sh, so every argument has to survive
-    word-splitting verbatim -- a hostile session name must arrive as one
-    literal argument, never as a new word or a substitution.
+    POSIX: `ssh` hands the ProxyCommand to /bin/sh, so every argument has
+    to survive word-splitting verbatim -- a hostile session name must arrive
+    as one literal argument, never as a new word or a substitution.
+    Windows: Win32-OpenSSH builds a CreateProcess command line, so the
+    builder emits subprocess.list2cmdline quoting; verify with the same
+    CommandLineToArgvW semantics instead of shlex.
     """
     cmd = ssh_module._proxy_command(_make_session(name=name), identity)
-    argv = shlex.split(cmd)
+    if sys.platform == "win32":
+        argv = _win32_split(cmd)
+    else:
+        argv = shlex.split(cmd)
 
     assert argv[:7] == [
         sys.executable,
@@ -331,6 +337,23 @@ def test_proxy_command_round_trips_through_the_shell(name, identity):
         assert len(argv) == 7
 
 
+def _win32_split(cmdline: str):
+    """Split a Windows command line with CommandLineToArgvW semantics."""
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.windll.shell32
+    # Declare signatures: default c_int return would truncate 64-bit pointers.
+    shell32.CommandLineToArgvW.argtypes = (wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int))
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    argc = ctypes.c_int()
+    argv_p = shell32.CommandLineToArgvW(cmdline, ctypes.byref(argc))
+    if not argv_p:
+        raise ValueError(f"CommandLineToArgvW failed for: {cmdline!r}")
+    try:
+        return [argv_p[i] for i in range(argc.value)]
+    finally:
+        ctypes.windll.kernel32.LocalFree(argv_p)
 # --- session resolution ------------------------------------------------------
 
 

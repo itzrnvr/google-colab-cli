@@ -15,6 +15,7 @@
 import json
 import os
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 try:
@@ -171,18 +172,22 @@ def test_read_stdin_eof_piped_sends_exit_and_closes_ws(
     real_thread = []
 
     class SyncThread:
-        def __init__(self, target, daemon=None):
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
             self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
             real_thread.append(self)
 
         def start(self):
-            self.target()
+            self.target(*self.args, **self.kwargs)
 
     console_mod._is_running = True
-    with patch("colab_cli.console.threading.Thread", SyncThread):
+    with (
+        patch("colab_cli.console.threading.Thread", SyncThread),
         # Use a tiny grace period for the test
-        with patch("colab_cli.console.PIPED_EOF_GRACE_SECONDS", 0.01):
-            on_open(mock_ws)
+        patch("colab_cli.console.PIPED_EOF_GRACE_SECONDS", 0.01),
+    ):
+        on_open(mock_ws)
 
     # Collect what was sent to the websocket
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
@@ -218,14 +223,21 @@ def test_read_stdin_eof_tty_does_not_close_ws(
     mock_ws = MagicMock()
 
     class SyncThread:
-        def __init__(self, target, daemon=None):
+        def __init__(self, target, args=(), kwargs=None, daemon=None):
             self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
 
         def start(self):
-            self.target()
+            self.target(*self.args, **self.kwargs)
 
     console_mod._is_running = True
-    with patch("colab_cli.console.threading.Thread", SyncThread):
+    # Force the line-buffered stdin backend: on win32 the default would be
+    # msvcrt.getwch(), which blocks for a real keypress (and ignores the
+    # stdin mock entirely).
+    with patch("colab_cli.console.threading.Thread", SyncThread), patch.object(
+        console_mod, "_use_msvcrt", return_value=False
+    ):
         on_open(mock_ws)
 
     sent_payloads = [json.loads(c.args[0]) for c in mock_ws.send.call_args_list]
@@ -259,3 +271,32 @@ def test_console_no_termios_degrades_gracefully(
         connect_console(mock_session)
 
     mock_ws_instance.run_forever.assert_called_once()
+
+
+def test_use_msvcrt_backend_selection(monkeypatch):
+    """Backend follows platform: win32+TTY -> msvcrt, else line-buffered."""
+    import colab_cli.console as console_mod
+
+    monkeypatch.setattr(console_mod.sys, "platform", "win32")
+    assert console_mod._use_msvcrt(True) is True
+    assert console_mod._use_msvcrt(False) is False
+    monkeypatch.setattr(console_mod.sys, "platform", "linux")
+    assert console_mod._use_msvcrt(True) is False
+
+
+def test_windows_resize_poller_forwards_changes():
+    """No SIGWINCH on Windows: the poller must emit a size frame on change."""
+    import colab_cli.console as console_mod
+
+    sizes = [os.terminal_size((80, 24)), os.terminal_size((120, 30))]
+    mock_ws = MagicMock()
+    stop = threading.Event()
+    with patch.object(
+        console_mod.os, "get_terminal_size", side_effect=sizes * 8
+    ):
+        # Let it poll a few times, then stop.
+        stopper = threading.Timer(0.6, stop.set)
+        stopper.start()
+        console_mod._windows_resize_poller(mock_ws, stop)
+        stopper.join()
+    assert mock_ws.send.call_count >= 1

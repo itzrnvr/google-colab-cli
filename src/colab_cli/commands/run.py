@@ -31,7 +31,9 @@ See docs/05_run_command.md for the full design.
 """
 
 import datetime
+import json
 import os
+import sys
 import uuid
 from typing import List, Optional
 
@@ -270,6 +272,23 @@ def run_command(
             ),
         ),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit a machine-readable JSON result envelope on stdout.",
+        ),
+    ] = False,
+    stream_jsonl: Annotated[
+        bool,
+        typer.Option(
+            "--stream-jsonl",
+            help=(
+                "Stream one JSON object per kernel output message on stdout "
+                "as it arrives. Implies --json for the final envelope."
+            ),
+        ),
+    ] = False,
 ):
     """Run a Python script on a fresh Colab VM, then release the VM
 
@@ -424,8 +443,28 @@ def run_command(
         state.store.add(s)
 
         try:
+            machine = json_output or stream_jsonl
+            base_hook = _make_run_output_hook()
+
+            def _run_hook(o):
+                if stream_jsonl:
+                    sys.stdout.write(
+                        json.dumps(
+                            {
+                                "event": "output",
+                                "session": name,
+                                "cell_index": 0,
+                                "output": o,
+                            }
+                        )
+                        + "\n"
+                    )
+                    sys.stdout.flush()
+                else:
+                    base_hook(o)
+
             outputs = runtime.execute_code(
-                payload, output_hook=_make_run_output_hook(), timeout=timeout
+                payload, output_hook=_run_hook, timeout=timeout
             )
         except Exception:
             # Genuine transport-level failure. Cleanup still happens via the
@@ -442,6 +481,20 @@ def run_command(
                 "execution",
                 {"code": payload, "outputs": outputs, "via": "run"},
             )
+            if machine:
+                sys.stdout.write(
+                    json.dumps(
+                        {
+                            "event": "result",
+                            "session": name,
+                            "ok": exit_code == 0,
+                            "exit_code": exit_code,
+                            "outputs": outputs,
+                        }
+                    )
+                    + "\n"
+                )
+                sys.stdout.flush()
     finally:
         s.running = None
         state.store.add(s)

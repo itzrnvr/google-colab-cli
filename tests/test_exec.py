@@ -22,17 +22,6 @@ from colab_cli.cli import app
 runner = CliRunner()
 
 
-@pytest.fixture
-def mock_store(mock_common_state):
-    return mock_common_state.store
-
-
-@pytest.fixture
-def mock_runtime_class(mocker):
-    # Patch it in the command module where it's used
-    return mocker.patch("colab_cli.commands.execution.ColabRuntime")
-
-
 def test_cli_exec_file(mock_store, mock_runtime_class, mock_common_state, tmp_path):
     mock_session = MagicMock()
     mock_session.url = "http://url"
@@ -235,7 +224,8 @@ def test_cli_exec_outputs(
     mock_runtime.execute_code.side_effect = mock_execute_code
 
     result = runner.invoke(app, ["exec", "-s", "s1"], input="do_stuff()")
-    assert result.exit_code == 0
+    # Error outputs fail the command so wrappers can key on exit code.
+    assert result.exit_code == 1
 
     mock_handle_image.assert_any_call("png_data", "image/png", target_path=None)
     mock_handle_image.assert_any_call("jpeg_data", "image/jpeg", target_path=None)

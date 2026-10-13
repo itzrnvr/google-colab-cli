@@ -18,6 +18,28 @@ from unittest.mock import MagicMock
 
 
 @pytest.fixture(autouse=True)
+def _headless_prompt_toolkit(monkeypatch):
+    """Let PromptSession construct without a real Windows console.
+
+    prompt_toolkit's Win32Output queries the console screen buffer at
+    creation time, which raises NoConsoleScreenBufferError in headless
+    shells (piped CI, background pytest). The REPL tests never render
+    interactively; routing output creation through a dummy keeps them
+    hermetic without touching product code.
+    """
+    try:
+        from prompt_toolkit.output import DummyOutput
+
+        monkeypatch.setattr(
+            "prompt_toolkit.output.defaults.create_output",
+            lambda *a, **k: DummyOutput(),
+            raising=False,
+        )
+    except ImportError:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def mock_common_state(mocker):
     # Patch the state singleton in common.py
     mock_state = mocker.patch("colab_cli.common.state")
@@ -48,3 +70,14 @@ def mock_common_state(mocker):
     mocker.patch("colab_cli.commands.run.ColabRuntime")
 
     return mock_state
+
+
+@pytest.fixture
+def mock_store(mock_common_state):
+    return mock_common_state.store
+
+
+@pytest.fixture
+def mock_runtime_class(mocker):
+    # Patch it in the command module where it's used
+    return mocker.patch("colab_cli.commands.execution.ColabRuntime")

@@ -251,17 +251,41 @@ def restart_kernel(
         runtime.stop()
 
 
-def sessions_command():
+def sessions_command(
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit sessions as a JSON array on stdout.",
+        ),
+    ] = False,
+):
     """List all active sessions"""
     from colab_cli.common import state
 
     sessions, assignments = state.sync_sessions()
+    name_by_endpoint = {s.endpoint: s.name for s in sessions.values()}
+    if json_output:
+        import json as _json
+
+        typer.echo(
+            _json.dumps(
+                [
+                    {
+                        "name": name_by_endpoint.get(a.endpoint, "?"),
+                        "endpoint": a.endpoint,
+                        "accelerator": a.accelerator.value,
+                        "variant": a.variant.name,
+                        "machine_shape": a.machine_shape.name,
+                    }
+                    for a in assignments
+                ]
+            )
+        )
+        return
     if not assignments:
         typer.echo("[colab] No active sessions found on server.")
         return
-
-    # Build endpoint -> local-name lookup so we can lead with the friendly name.
-    name_by_endpoint = {s.endpoint: s.name for s in sessions.values()}
     for a in assignments:
         name = name_by_endpoint.get(a.endpoint, "?")
         # `a.variant` is an int-valued AssignmentVariant (DEFAULT=0/GPU=1/TPU=2);
@@ -301,21 +325,54 @@ def status(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit session status as JSON on stdout.",
+        ),
+    ] = False,
 ):
     """Show session status"""
     from colab_cli.common import state
+
+    def _as_json(s) -> dict:
+        return {
+            "name": s.name,
+            "endpoint": s.endpoint,
+            "accelerator": s.accelerator,
+            "variant": s.variant,
+            "machine_shape": s.machine_shape,
+            "status": f"BUSY ({s.running})" if s.running else "IDLE",
+            "running": s.running,
+            "last_execution": s.last_execution,
+            "kernel_id": s.kernel_id,
+            "session_id": s.session_id,
+        }
 
     local_sessions, _ = state.sync_sessions()
     if session:
         s = state.store.get(session)
         if s:
-            _print_status_for(s)
+            if json_output:
+                import json as _json
+
+                typer.echo(_json.dumps(_as_json(s)))
+            else:
+                _print_status_for(s)
         else:
             typer.echo(f"[colab] Session '{session}' not found.")
         return
 
     if not local_sessions:
         typer.echo("[colab] No active sessions.")
+        return
+    if json_output:
+        import json as _json
+
+        typer.echo(
+            _json.dumps([_as_json(s) for s in local_sessions.values()])
+        )
         return
     for s in local_sessions.values():
         _print_status_for(s)

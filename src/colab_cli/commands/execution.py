@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import datetime
+import json
 import nbformat
 import os
 import re
@@ -161,10 +162,47 @@ def exec_command(
             ),
         ),
     ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Emit a machine-readable JSON result envelope on stdout and "
+                "suppress human chatter (which moves to stderr). Designed for "
+                "wrapping by programs and agents."
+            ),
+        ),
+    ] = False,
+    stream_jsonl: Annotated[
+        bool,
+        typer.Option(
+            "--stream-jsonl",
+            help=(
+                "Stream one JSON object per kernel output message on stdout "
+                "as it arrives (instant failure feedback: error outputs "
+                "appear the moment the kernel emits them, no full re-check "
+                "needed). Implies --json for the final envelope."
+            ),
+        ),
+    ] = False,
 ):
     """Execute code in a session"""
     from colab_cli.common import state
 
+    machine = json_output or stream_jsonl
+
+    def _emit(obj) -> None:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+    def _chatter(msg: str) -> None:
+        # Human chatter goes to stderr in machine mode so stdout stays
+        # parseable (one JSON object per line). In human mode call echo
+        # plainly so output (and echo mocks) see the classic signature.
+        if machine:
+            typer.echo(msg, err=True)
+        else:
+            typer.echo(msg)
     env_vars = _parse_env_vars(env)
     name = state.resolve_session(session)
     s = state.get_session(name)
@@ -172,7 +210,7 @@ def exec_command(
     code_blocks = []
     if file:
         if file.endswith(".ipynb"):
-            typer.echo(f"[colab] Parsing notebook '{file}'...")
+            _chatter(f"[colab] Parsing notebook '{file}'...")
             with open(file, "r", encoding="utf-8") as f:
                 nb = nbformat.read(f, as_version=4)
                 for cell in nb.cells:
@@ -185,7 +223,7 @@ def exec_command(
                             {"code": cell.source, "id": cell.id, "cell": cell}
                         )
         else:
-            with open(file, "r") as f:
+            with open(file, "r", encoding="utf-8") as f:
                 code_blocks.append({"code": f.read(), "id": None})
     else:
         if is_stdin_tty():
@@ -230,6 +268,8 @@ def exec_command(
         is_nb = file and file.endswith(".ipynb")
         s.running = f"exec({file or 'stdin'})"
         state.store.add(s)
+        results = []
+        exec_exit = 0
 
         for i, block in enumerate(code_blocks):
             code = _build_env_prelude(env_vars) + block["code"]
@@ -244,7 +284,7 @@ def exec_command(
                     identifier = ""
 
                 identifier_str = f" - {identifier}" if identifier else ""
-                typer.echo(
+                _chatter(
                     f"[colab] Executing cell {i + 1}/{len(code_blocks)}{identifier_str}..."
                 )
 
@@ -255,10 +295,38 @@ def exec_command(
             )
             state.store.add(s)
 
+            def _hook(o, _i=i, _id=identifier):
+                if stream_jsonl:
+                    # Instant feedback: the error/traceback line hits the
+                    # wrapper's stdout the moment the kernel emits it.
+                    _emit(
+                        {
+                            "event": "output",
+                            "session": name,
+                            "cell_index": _i,
+                            "cell_id": _id,
+                            "output": o,
+                        }
+                    )
+                else:
+                    display_output(o, output_image)
+
             outputs = runtime.execute_code(
                 code,
-                output_hook=lambda o: display_output(o, output_image),
+                output_hook=_hook,
                 timeout=timeout,
+            )
+            cell_failed = any(o.get("output_type") == "error" for o in outputs)
+            if cell_failed:
+                exec_exit = 1
+            results.append(
+                {
+                    "cell_index": i,
+                    "cell_id": block.get("id"),
+                    "identifier": identifier,
+                    "ok": not cell_failed,
+                    "outputs": outputs,
+                }
             )
             if "cell" in block:
                 save_output(outputs, block["cell"])
@@ -272,15 +340,29 @@ def exec_command(
                     "cell_id": block.get("id"),
                 },
             )
+        if machine:
+            _emit(
+                {
+                    "event": "result",
+                    "session": name,
+                    "ok": exec_exit == 0,
+                    "exit_code": exec_exit,
+                    "cells": results,
+                }
+            )
     finally:
         s.running = None
         state.store.add(s)
         runtime.stop()
         if file and file.endswith(".ipynb"):
             output_file = os.path.splitext(file)[0] + "_output.ipynb"
-            typer.echo(f"[colab] Saving notebook with outputs to '{output_file}'...")
+            _chatter(f"[colab] Saving notebook with outputs to '{output_file}'...")
             with open(output_file, "w", encoding="utf-8") as f:
                 nbformat.write(nb, f)
+    # A failed cell must fail the command: wrappers key on exit code, and
+    # previously `colab exec` always exited 0 even on kernel exceptions.
+    if exec_exit != 0:
+        raise typer.Exit(exec_exit)
 
 
 def repl(

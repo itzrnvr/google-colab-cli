@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import base64
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,6 +25,12 @@ from colab_cli.utils import handle_image, print_kitty, render_display_data
 
 @patch("colab_cli.utils.sys.stdout.isatty", return_value=True)
 def test_print_kitty_emits_escape_sequence_on_tty(_mock_isatty, capsys):
+    if sys.platform == "win32":
+        # No Windows terminal speaks the Kitty graphics protocol; the
+        # function must stay silent and let the file-write path carry it.
+        print_kitty(b"fake-png-bytes")
+        assert capsys.readouterr().out == ""
+        return
     print_kitty(b"fake-png-bytes")
     captured = capsys.readouterr()
     assert "_Ga=T,f=100;" in captured.out

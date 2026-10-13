@@ -59,6 +59,11 @@ def print_kitty(image_bytes: bytes):
     """
     if not sys.stdout.isatty():
         return
+    if sys.platform == "win32":
+        # No Windows terminal speaks the Kitty graphics protocol; emitting
+        # the escape + base64 blob prints garbage. Callers still get the
+        # image via handle_image's file-write path below.
+        return
     try:
         b64_data = base64.b64encode(image_bytes).decode("ascii")
         sys.stdout.write("\n\033_Ga=T,f=100;")

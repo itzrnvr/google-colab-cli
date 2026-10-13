@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -390,25 +391,26 @@ def _extract_command_names(help_output: str) -> list[str]:
     for line in lines:
         if "Commands" in line and ("─" in line or "-" in line):
             in_commands = True
-            continue
         if in_commands:
-            stripped = line.strip()
-            if stripped.startswith("╰") or stripped.startswith("`"):
+            # Command rows start the name at the command column ("│ name  ...");
+            # wrapped description continuations ("│                 avail...")
+            # start deeper. Anchor on the column so terminal width cannot
+            # promote a description word into a fake command name.
+            m = re.match(r"^│ ([a-z0-9-]+)(?:  +|\s*│)", line.strip())
+            if m:
+                names.append(m.group(1))
+            elif line.strip().startswith(("╰", "└", "`")):
                 break
-            # Lines look like:  "│ help        Show help for a command. │"
-            # Strip the rich box characters.
-            inner = stripped.strip("│").strip()
-            if not inner:
-                continue
-            tok = inner.split()[0]
-            names.append(tok)
     return names
 
 
 def test_cli_help_commands_sorted_alphabetically():
     """`colab --help` should list subcommands in alphabetical order so that
     users (and docs) can find them deterministically."""
-    result = runner.invoke(app, ["--help"])
+    # Pin the render width: typer sizes its rich console from TERMINAL_WIDTH
+    # (else the real console width), and narrow widths wrap descriptions
+    # onto continuation lines the parser could mistake for commands.
+    result = runner.invoke(app, ["--help"], env={"TERMINAL_WIDTH": "100"})
     assert result.exit_code == 0
     names = _extract_command_names(result.output)
     assert names, f"Could not parse command names from help output:\n{result.output}"
@@ -421,7 +423,7 @@ def test_cli_help_commands_sorted_alphabetically():
 def test_cli_help_subcommand_commands_sorted_alphabetically():
     """`colab help` (the help subcommand, no argument) should also list
     subcommands alphabetically — it shares the parent group's renderer."""
-    result = runner.invoke(app, ["help"])
+    result = runner.invoke(app, ["help"], env={"TERMINAL_WIDTH": "100"})
     assert result.exit_code == 0
     names = _extract_command_names(result.output)
     assert names, f"Could not parse command names from help output:\n{result.output}"

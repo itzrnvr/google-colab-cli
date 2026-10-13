@@ -136,8 +136,13 @@ def announce_upgrade(
 def _get_install_command() -> str:
     """Return the recommended installation command based on the environment."""
     import sys
+    from itertools import pairwise
+    from pathlib import Path
 
-    if is_self_install_supported() and "/uv/tools/" in sys.executable:
+    # Path.parts is separator-aware: backslashes on Windows, so a raw
+    # "/uv/tools/" substring never matches "%APPDATA%\\uv\\tools\\...".
+    in_uv_tool = ("uv", "tools") in pairwise(Path(sys.executable).parts)
+    if is_self_install_supported() and in_uv_tool:
         return f"uv tool install -U {PYPI_PACKAGE_NAME}"
     return f"pip install --upgrade {PYPI_PACKAGE_NAME}"
 

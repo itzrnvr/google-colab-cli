@@ -15,7 +15,17 @@
 import datetime
 import json
 import os
+import re
 from typing import Any, Dict, List
+
+
+# Windows forbids <>:"/\|?* and control chars in filenames; a session named
+# "a:b" would otherwise fail mid-command on first log_event with EINVAL.
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _safe_log_stem(session_name: str) -> str:
+    return _UNSAFE_FILENAME_CHARS.sub("_", session_name)
 
 
 class HistoryLogger:
@@ -24,7 +34,7 @@ class HistoryLogger:
         os.makedirs(self.log_dir, exist_ok=True)
 
     def _get_log_path(self, session_name: str) -> str:
-        return os.path.join(self.log_dir, f"{session_name}.jsonl")
+        return os.path.join(self.log_dir, f"{_safe_log_stem(session_name)}.jsonl")
 
     def log_event(self, session_name: str, event_type: str, data: Dict[str, Any]):
         """
