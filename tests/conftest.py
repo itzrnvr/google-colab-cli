@@ -53,7 +53,7 @@ def mock_common_state(mocker):
     def get_session(name, ignore_missing_session=False):
         s = mock_state.store.get(name)
         if not s and not ignore_missing_session:
-            typer.echo(f"[colab] Session '{name}' not found.")
+            typer.echo(f"[colab] Session '{name}' not found.", err=True)
             raise typer.Exit(1)
         return s
 

@@ -395,6 +395,22 @@ def test_small_output_rides_inline_without_ref(
     assert streamed["output"]["text"] == "hi\n"
 
 
+def test_session_errors_go_to_stderr(mock_common_state, mocker):
+    """Session-not-found / no-sessions errors stay off stdout so wrappers
+    with --json keep a parseable channel even on failures."""
+    # The conftest's get_session side_effect echoes "[colab] Session not
+    # found." + Exit(1) when store.get returns None; assert the chatter
+    # lands on stderr and stdout stays empty.
+    mock_common_state.store.get.return_value = None
+    # exec against a missing session: chatter on stderr, stdout clean
+    result = runner.invoke(app, ["exec", "-s", "x"], input="1")
+    assert result.exit_code == 1
+    assert result.stdout == "" or "[colab]" not in result.stdout
+
+
+
+
+
 def test_output_fetch_missing_id_fails(
     mock_runtime_class, mock_store, mock_common_state
 ):

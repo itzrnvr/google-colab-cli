@@ -361,7 +361,7 @@ def status(
             else:
                 _print_status_for(s)
         else:
-            typer.echo(f"[colab] Session '{session}' not found.")
+            typer.echo(f"[colab] Session '{session}' not found.", err=True)
         return
 
     if not local_sessions:
@@ -389,7 +389,7 @@ def stop(
     name = state.resolve_session(session)
     s = state.get_session(name, ignore_missing_session=True)
     if not s:
-        typer.echo(f"[colab] Session '{name}' not found.")
+        typer.echo(f"[colab] Session '{name}' not found.", err=True)
         return
 
     typer.echo(f"[colab] Stopping session '{name}'...")

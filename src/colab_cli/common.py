@@ -155,7 +155,8 @@ class State:
         local_sessions = self.store.list()
         if not local_sessions:
             typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'."
+                "[colab] Error: No active sessions found. Create one with 'colab new'.",
+                err=True,
             )
             raise typer.Exit(1)
 
@@ -175,7 +176,8 @@ class State:
             raise typer.Exit(1)
         else:
             typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'."
+                "[colab] Error: No active sessions found. Create one with 'colab new'.",
+                err=True,
             )
             raise typer.Exit(1)
 
