@@ -240,6 +240,12 @@ Invoke-Check 'colab --account rejects a bad label' {
     $null = Invoke-Cli @('--account', 'bad label', 'account', 'list') -OkExit @(2)
 } | Out-Null
 
+Invoke-Check 'colab doctor reports a verdict' {
+    $out = Invoke-Cli @('doctor', '--json')
+    $doc = $out | ConvertFrom-Json
+    if ($null -eq $doc.ok) { throw "doctor did not report a verdict: $out" }
+} | Out-Null
+
 Invoke-Check 'the timeout guard is in the installed fork' {
     $null = Invoke-Native -Exe $SystemPy -NativeArgs @('-c', "import inspect, colab_cli.runtime as r; src=inspect.getsource(r); assert '_run_with_deadline' in src and 'ExecutionTimeout' in src; print('ok')")
 } | Out-Null

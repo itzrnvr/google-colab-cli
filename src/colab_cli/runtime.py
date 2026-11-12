@@ -207,23 +207,51 @@ class ColabRuntime:
         fn: Callable[[], Any],
         timeout: Optional[float],
         description: str,
+        last_activity: Optional[Callable[[], float]] = None,
+        max_time: Optional[float] = None,
     ) -> Any:
-        """Run ``fn`` under a hard wall-clock deadline.
+        """Run ``fn`` under a deadline, enforcing it from the outside.
 
-        ``jupyter_kernel_client`` treats its ``timeout`` argument as an *idle*
-        budget: once the deadline passes it recomputes
-        ``timeout = max(0, deadline - now)`` and then loops with
-        ``wait(0)`` / ``get_msg(timeout=0)``. ``wait(0)`` returns immediately
-        and ``get_msg(timeout=0)`` raises ``Empty``, so the loop spins at
-        100% CPU and **never** raises ``TimeoutError``. The remote cell keeps
-        running (still consuming Colab compute quota) and the CLI never
-        returns.
+        ``jupyter_kernel_client`` cannot be trusted with the deadline:
 
-        This wrapper enforces the deadline from the outside. On expiry it
-        interrupts the kernel -- which makes the spinning poll loop observe
-        the reply and unwind -- and then raises ``ExecutionTimeout``.
+        * With a ``timeout`` it recomputes ``timeout = max(0, deadline - now)``
+          and then loops with ``wait(0)`` / ``get_msg(timeout=0)``. ``wait(0)``
+          returns immediately and ``get_msg(timeout=0)`` raises ``Empty``, so
+          the poll loop spins at 100% CPU and **never** raises
+          ``TimeoutError``. The remote cell keeps running (still consuming
+          Colab compute quota) and the CLI never returns.
+        * Without a ``timeout`` it uses its own 10 s default, which has the
+          same fate.
+
+        So the kernel call is always made with ``timeout=None`` (block until
+          a message arrives, no spin) and the budget is enforced here.
+
+        ``timeout`` semantics:
+
+        * With ``last_activity`` (the streaming path) it is an **idle
+          limit**: the number of seconds allowed between two messages from
+          the execution. A run that keeps printing can take as long as it
+          needs -- which is what a training job does.
+        * Without it (the non-streaming path) it is an absolute wall-clock
+          limit.
+
+        ``None`` or a value <= 0 means "no limit" unless ``max_time`` is set.
+        ``max_time`` is always an absolute cap.
+
+        On expiry the kernel is interrupted -- which makes the spinning poll
+        loop observe the reply and unwind -- and ``ExecutionTimeout`` is
+        raised.
         """
-        if timeout is None:
+        idle_limit = None
+        absolute_limit = max_time
+
+        if timeout is not None and timeout > 0:
+            if last_activity is not None:
+                idle_limit = timeout
+            else:
+                absolute_limit = timeout if absolute_limit is None else absolute_limit
+
+        if idle_limit is None and absolute_limit is None:
             return fn()
 
         result: Dict[str, Any] = {}
@@ -236,18 +264,37 @@ class ColabRuntime:
 
         thread = threading.Thread(target=worker, name="colab-exec", daemon=True)
         thread.start()
-        thread.join(timeout)
+
+        started = time.monotonic()
+        while thread.is_alive():
+            now = time.monotonic()
+            limits = []
+            if idle_limit is not None:
+                limits.append(idle_limit - (now - last_activity()))
+            if absolute_limit is not None:
+                limits.append(absolute_limit - (now - started))
+            if limits and min(limits) <= 0:
+                break
+            # join() returns as soon as the worker finishes, so this waits
+            # for either completion or the next limit.
+            thread.join(min(limits) if limits else 0.5)
 
         if thread.is_alive():
             self._interrupt_kernel()
             thread.join(INTERRUPT_GRACE_SECONDS)
             if thread.is_alive():
+                if idle_limit is not None:
+                    what = (
+                        f"produced no output for {idle_limit:g}s "
+                        f"(the --timeout idle limit)"
+                    )
+                else:
+                    what = f"exceeded the {absolute_limit:g}s timeout"
                 raise ExecutionTimeout(
-                    f"{description} exceeded the {timeout:g}s timeout and the "
-                    "kernel did not acknowledge the interrupt. The remote cell "
-                    "may still be running and will keep consuming compute "
-                    "quota - stop the session (`colab stop -s <name>`) to "
-                    "release it."
+                    f"{description} {what} and the kernel did not acknowledge "
+                    "the interrupt. The remote cell may still be running and "
+                    "will keep consuming compute quota - stop the session "
+                    "(`colab stop -s <name>`) to release it."
                 )
 
         if "error" in result:
@@ -262,19 +309,13 @@ class ColabRuntime:
         output_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        # ``jupyter_kernel_client`` defaults ``timeout`` to ``REQUEST_TIMEOUT``
-        # (10 seconds) on both ``execute`` and ``execute_interactive``. That
-        # value is a wall-clock budget that shrinks every time the poll loop
-        # iterates -- as long as iopub/stdin events arrive back-to-back the
-        # call survives, but a single >10s quiet stretch (e.g. a kernel
-        # blocked on ``input_request`` while the user OAuths in the browser)
-        # will raise ``TimeoutError`` even though the underlying execution is
-        # still healthy. Callers that know they need a longer ceiling can
-        # pass ``timeout=`` here; otherwise we forward whatever the upstream
-        # default is (currently 10s).
-        kwargs = {"allow_stdin": allow_stdin}
-        if timeout is not None:
-            kwargs["timeout"] = timeout
+        # The kernel call is always made with ``timeout=None``: with any
+        # timeout the client turns the deadline into a 100% CPU spin that
+        # never raises, and with its own 10 s default it does the same after
+        # 10 s. The budget is enforced by ``_run_with_deadline`` instead --
+        # as an idle limit when output is streamed, an absolute limit
+        # otherwise.
+        kwargs = {"allow_stdin": allow_stdin, "timeout": None}
 
         # Wrap stdin_hook to log inputs
         original_stdin_hook = stdin_hook
@@ -298,10 +339,15 @@ class ColabRuntime:
             # If we have an output hook, we use execute_interactive and manage buffering ourselves
             outputs = []
 
+            # The idle clock: every message from the kernel resets it.
+            last_message = [time.monotonic()]
+
             def wrapped_output_hook(msg):
                 from jupyter_kernel_client.client import (
                     output_hook as default_output_hook,
                 )
+
+                last_message[0] = time.monotonic()
 
                 # Update local outputs list using the default logic
                 new_indexes = default_output_hook(outputs, msg)
@@ -317,6 +363,7 @@ class ColabRuntime:
                 ),
                 timeout,
                 "Code execution",
+                last_activity=lambda: last_message[0],
             )
             # execute_interactive returns the raw reply message
             reply_content = reply["content"] if reply else {"status": "error"}

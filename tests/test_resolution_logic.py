@@ -51,7 +51,16 @@ def test_resolve_session_with_local_but_none_on_server():
     with patch("typer.echo") as mock_echo:
         with pytest.raises(typer.Exit):
             state.resolve_session(None)
-        mock_echo.assert_any_call("[colab] Pruned 1 stale local session(s).")
+        # The pruning notice goes to stderr (stdout stays machine-parseable)
+        # and explains what happened and what to do next.
+        prune_calls = [
+            c for c in mock_echo.call_args_list
+            if "pruned" in str(c.args[0]).lower() and c.kwargs.get("err")
+        ]
+        assert prune_calls, (
+            "the pruning notice must be reported on stderr; calls: "
+            f"{mock_echo.call_args_list}"
+        )
         mock_echo.assert_any_call(
             "[colab] Error: No active sessions found. Create one with 'colab new'.",
             err=True,

@@ -111,16 +111,31 @@ def save_output(outputs, cell):
             )
 
 
-def display_output(out, output_image=None):
+def display_output(out, output_image=None, force_stderr: bool = False):
+    """Render one kernel output.
+
+    ``force_stderr`` sends the raw text to stderr. It is used by ``--json``,
+    where stdout must carry the JSON envelope and nothing else: a wrapper
+    that pipes stdout into a JSON parser cannot cope with the training log
+    interleaved with the envelope.
+    """
     if out.get("output_type") == "stream":
-        stream = sys.stderr if out.get("name") == "stderr" else sys.stdout
+        stream = (
+            sys.stderr
+            if (out.get("name") == "stderr" or force_stderr)
+            else sys.stdout
+        )
         stream.write(out.get("text", ""))
         stream.flush()
     elif "data" in out:
         data = out["data"]
         text = render_display_data(data)
         if text is not None:
-            _console.print(text)
+            if force_stderr:
+                sys.stderr.write(text)
+                sys.stderr.flush()
+            else:
+                _console.print(text)
         if png := data.get("image/png"):
             handle_image(png, "image/png", target_path=output_image)
         elif jpeg := data.get("image/jpeg"):
@@ -150,7 +165,14 @@ def exec_command(
     ] = None,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
+        typer.Option(
+            "--timeout",
+            help=(
+                "Seconds to wait without output before failing (0 for no "
+                "limit). This is an idle limit: a run that keeps printing may "
+                "take as long as it needs, which is what a training job does."
+            ),
+        ),
     ] = 30.0,
     env: Annotated[
         Optional[List[str]],
@@ -245,6 +267,37 @@ def exec_command(
 
     code_blocks = []
     if file:
+        # `-f` reads the file LOCALLY and sends its contents to the VM. An
+        # agent that passes a path that only exists on the VM (e.g.
+        # "/content/train.py") used to get a bare
+        # `FileNotFoundError: '/content/train.py'`, which reads as "the file
+        # is missing" and sends the agent round in circles re-uploading it.
+        # Say what actually happened instead.
+        if not os.path.exists(file):
+            remote_looking = file.startswith("/") or ":" in file
+            typer.echo(
+                f"[colab] '{file}' does not exist on this machine. "
+                "'-f/--file' reads the script LOCALLY and sends its "
+                "contents to the VM.",
+                err=True,
+            )
+            if remote_looking:
+                typer.echo(
+                    "[colab] That path looks like it belongs to the remote "
+                    "VM, which '-f' cannot reach.",
+                    err=True,
+                )
+                typer.echo(
+                    "[colab] To run code that is already on the VM, pipe it "
+                    f"in instead:  cat {file} | colab exec -s {name}",
+                    err=True,
+                )
+            typer.echo(
+                "[colab] Pass a path that exists here, or upload the file "
+                "first with `colab upload`.",
+                err=True,
+            )
+            raise typer.Exit(code=2)
         if file.endswith(".ipynb"):
             _chatter(f"[colab] Parsing notebook '{file}'...")
             with open(file, "r", encoding="utf-8") as f:
@@ -387,7 +440,9 @@ def exec_command(
                         }
                     )
                 else:
-                    display_output(o, output_image)
+                    # With --json, stdout is reserved for the envelope, so
+                    # the raw output goes to stderr.
+                    display_output(o, output_image, force_stderr=json_output)
 
             outputs = runtime.execute_code(
                 code,

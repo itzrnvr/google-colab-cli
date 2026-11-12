@@ -26,6 +26,7 @@ from colab_cli.common import state, setup_logging
 from colab_cli.commands import (
     account,
     automation,
+    doctor,
     execution,
     files,
     run,
@@ -182,6 +183,7 @@ run.register(app)
 ssh.register(app)
 utility.register(app)
 account.register(app)
+doctor.register(app)
 usage.register(app)
 
 

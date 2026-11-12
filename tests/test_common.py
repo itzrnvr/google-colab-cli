@@ -106,7 +106,10 @@ def test_get_session_unknown_name_exits(real_state, capsys):
         real_state.get_session("nope")
 
     assert exc.value.exit_code == 1
-    assert "Session 'nope' not found." in capsys.readouterr().out
+    # On stderr: stdout must stay machine-parseable.
+    captured = capsys.readouterr()
+    assert "Session 'nope' not found." in captured.err
+    assert captured.out == ""
     real_state.client.list_assignments.assert_not_called()
 
 

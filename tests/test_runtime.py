@@ -133,9 +133,18 @@ def test_colab_runtime_execute_code():
 
 
 def test_colab_runtime_execute_code_default_no_timeout():
-    """By default, execute_code should NOT pass a timeout (relies on jupyter
-    kernel client default), preserving existing behavior for fast / streaming
-    workloads."""
+    """The kernel call must never carry a deadline.
+
+    jupyter-kernel-client turns any timeout into a 100% CPU spin that never
+    raises TimeoutError (it recomputes `timeout = max(0, deadline - now)` and
+    then polls with `wait(0)` / `get_msg(timeout=0)`). Omitting the argument
+    is just as bad: the client then uses its own 10 s default and spins
+    after 10 s.
+
+    So the call is made with an explicit `timeout=None` -- which makes the
+    client block on the message event instead of spinning -- and the budget
+    is enforced by `_run_with_deadline` outside the client.
+    """
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
@@ -144,11 +153,11 @@ def test_colab_runtime_execute_code_default_no_timeout():
     runtime.execute_code("print(1)")
 
     _, kwargs = mock_kc.execute.call_args
-    assert "timeout" not in kwargs
+    assert kwargs.get("timeout", "missing") is None
 
 
 def test_colab_runtime_execute_code_with_timeout():
-    """When a timeout is supplied, it must be forwarded to kernel_client.execute."""
+    """A timeout is enforced by the runtime, not handed to the client."""
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
@@ -157,12 +166,11 @@ def test_colab_runtime_execute_code_with_timeout():
     runtime.execute_code("print(1)", timeout=600)
 
     _, kwargs = mock_kc.execute.call_args
-    assert kwargs.get("timeout") == 600
+    assert kwargs.get("timeout") is None
 
 
 def test_colab_runtime_execute_interactive_with_timeout():
-    """timeout must also be plumbed through the execute_interactive branch
-    (used when an output_hook is supplied)."""
+    """Same for the execute_interactive branch (used with an output_hook)."""
     runtime = ColabRuntime("http://url", "token123")
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
@@ -171,7 +179,7 @@ def test_colab_runtime_execute_interactive_with_timeout():
     runtime.execute_code("print(1)", output_hook=lambda o: None, timeout=600)
 
     _, kwargs = mock_kc.execute_interactive.call_args
-    assert kwargs.get("timeout") == 600
+    assert kwargs.get("timeout") is None
 
 
 def test_colab_runtime_stop():
@@ -201,7 +209,7 @@ def test_colab_runtime_stdin_logging():
     mock_kc = MagicMock()
     runtime._kernel_client = mock_kc
 
-    mock_kc.execute.side_effect = lambda code, allow_stdin=False, stdin_hook=None: {
+    mock_kc.execute.side_effect = lambda code, allow_stdin=False, stdin_hook=None, timeout=None: {
         "outputs": [{"text": stdin_hook("Enter something: ")}]
     }
 

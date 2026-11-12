@@ -14,7 +14,7 @@
 
 import logging
 import uuid
-from typing import Optional
+from typing import List, Optional
 import requests
 import typer
 from typing_extensions import Annotated
@@ -494,12 +494,51 @@ def status(
             help="Emit session status as JSON on stdout.",
         ),
     ] = False,
+    files: Annotated[
+        bool,
+        typer.Option(
+            "--files",
+            help=(
+                "Also list the files present on the VM (/content) with their "
+                "sizes. After a training run this is how you find out what "
+                "to download."
+            ),
+        ),
+    ] = False,
 ):
     """Show session status"""
     from colab_cli.common import state
 
+    def _remote_files(s) -> List[dict]:
+        """The files on the VM, with sizes.
+
+        This is the missing link for an agent that just ran a training
+        job: without it, the agent has to guess the remote path of the
+        checkpoint it is supposed to download.
+        """
+        from colab_cli.contents import ContentsClient
+
+        try:
+            data = ContentsClient(s).list_dir("content")
+        except Exception as e:
+            return [{"error": str(e)}]
+        if data.get("type") != "directory":
+            return []
+        out = []
+        for item in data.get("content", []):
+            entry = {
+                "name": item.get("name"),
+                "type": item.get("type"),
+                "path": item.get("path") or item.get("name"),
+            }
+            size = item.get("size")
+            if size is not None:
+                entry["size"] = size
+            out.append(entry)
+        return sorted(out, key=lambda e: str(e.get("name")))
+
     def _as_json(s) -> dict:
-        return {
+        doc = {
             "name": s.name,
             "endpoint": s.endpoint,
             "accelerator": s.accelerator,
@@ -510,7 +549,12 @@ def status(
             "last_execution": s.last_execution,
             "kernel_id": s.kernel_id,
             "session_id": s.session_id,
+            # Only a real account label belongs in the document.
+            "account": s.account if isinstance(s.account, str) else None,
         }
+        if files:
+            doc["files"] = _remote_files(s)
+        return doc
 
     local_sessions, _ = state.sync_sessions()
     if session:

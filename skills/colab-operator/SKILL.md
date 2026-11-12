@@ -117,6 +117,31 @@ The job's stdout+stderr and its exit code land in `~/.config/colab-cli/psmux-log
 - `colab sessions --json` and `colab status [-s N] --json` emit arrays/objects instead of tables — prefer them over scraping human output.
 - `colab exec` exits 1 when any cell raises (no SystemExit code mapping — use `colab run` when you need the script's numeric exit code).
 
+## Training a model, end to end
+
+The loop, in order. Each step says what the next one is.
+
+0. **`colab doctor`** — one verdict, and if something is broken the exact
+   commands to fix it. Run this first; it costs nothing and touches no quota.
+   `colab doctor --json` is the machine-readable form.
+1. **Rent** — `colab new -s proj --gpu T4`. Always pass `-s`. If the quota is
+   spent the CLI rotates to another account by itself; if a matching runtime
+   is already running it adopts that one.
+2. **Train** — `colab exec -s proj -f train.py --timeout 3600 --json`.
+   `-f` reads the script **locally**; `--timeout` is an *idle* limit (seconds
+   between outputs) so a run that logs every minute may take hours; `--json`
+   puts exactly one JSON envelope on stdout and the raw log on stderr.
+3. **Collect** — `colab status -s proj --json --files` lists what is on the VM
+   (with the paths that work), then `colab download -s proj <path> <local>`.
+4. **Iterate** — edit the script locally and run step 2 on the *same* session:
+   the runtime, the dataset and the installed packages all stay.
+5. **Stop** — `colab stop -s proj`. A T4 left running keeps burning the
+   account's daily quota; this is the fastest way to exhaust it.
+
+Remote paths: the contents API is rooted at the notebook root but the VM's
+working directory is `/content`, so `model.json` and `content/model.json` name
+the same file and both work.
+
 ## Safety
 - **Always `colab stop -s <name>` when done** — idle VMs burn compute units. `colab run` (without `--keep`) self-cleans even if the script errors.
 - Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.

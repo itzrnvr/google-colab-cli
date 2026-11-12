@@ -13,12 +13,16 @@
 # limitations under the License.
 
 import base64
+from typing import Optional
 from urllib.parse import quote
 
 import requests
 
 from colab_cli.state import SessionState
-from colab_cli.utils import get_status_code
+
+# The VM's working directory. The contents API is rooted at the notebook
+# root, so files the user cares about live under this prefix.
+WORKING_DIR = "content"
 
 
 class ContentsClient:
@@ -29,18 +33,54 @@ class ContentsClient:
     def _request(
         self, method: str, path: str, params: dict = None, json_data: dict = None
     ):
-        # Quote the path, but don't encode slashes so directory paths stay intact
-        quoted_path = quote(path.strip("/"), safe="/")
-        url = f"{self.base_url}/api/contents/{quoted_path}"
-
         req_params = {"authuser": "0", "colab-runtime-proxy-token": self.token}
         if params:
             req_params.update(params)
 
-        response = requests.request(method, url, params=req_params, json=json_data)
+        def _send(target: str):
+            # Quote the path, but don't encode slashes so directory paths
+            # stay intact
+            quoted_path = quote(target.strip("/"), safe="/")
+            url = f"{self.base_url}/api/contents/{quoted_path}"
+            return requests.request(
+                method, url, params=req_params, json=json_data
+            )
 
-        if get_status_code(response) == 404:
-            raise FileNotFoundError(f"File or directory not found: {path}")
+        response = _send(path)
+
+        if response.status_code == 404:
+            # The VM's working directory is /content, but the contents API is
+            # rooted at the notebook root, so a bare name ("model.json") does
+            # not resolve while "content/model.json" does. Agents hit this
+            # constantly, so retry against the working directory before
+            # declaring the path wrong.
+            alt = self._working_dir_variant(path)
+            if alt:
+                alt_response = _send(alt)
+                if alt_response.status_code != 404:
+                    response = alt_response
+
+        if response.status_code == 404:
+            # A 404 from the contents API is ambiguous: it can mean the path
+            # is wrong, or it can mean the *runtime is gone* (the proxy host
+            # stops resolving a reclaimed VM). Reporting only "file not found"
+            # sends an agent round in circles re-uploading a file that was
+            # never the problem -- and, worse, it hides the fact that the
+            # compute quota is still being burned by the dead runtime.
+            detail = ""
+            try:
+                body = response.text or ""
+                if body:
+                    detail = f" ({body[:200].strip()})"
+            except Exception:  # pragma: no cover
+                pass
+            raise FileNotFoundError(
+                f"File or directory not found: {path}{detail}. Either the "
+                "path is wrong (remote paths are relative to the notebook "
+                "root, e.g. 'content/model.json' rather than 'model.json') or "
+                "the runtime is gone -- check `colab status -s <session>` and "
+                "`colab sessions`."
+            )
 
         response.raise_for_status()
 
@@ -49,6 +89,26 @@ class ContentsClient:
             return None
 
         return response.json()
+
+    @staticmethod
+    def _working_dir_variant(path: str) -> Optional[str]:
+        """The other spelling of ``path`` relative to the working directory.
+
+        The contents API is rooted at the notebook root but the VM's working
+        directory is ``/content``, so ``model.json`` and ``content/model.json``
+        name the same file. Return the counterpart, or None when there is no
+        sensible alternative.
+        """
+        clean = path.strip("/")
+        if not clean:
+            return None
+        if clean == WORKING_DIR:
+            return None
+        if clean.startswith(WORKING_DIR + "/"):
+            # content/x -> x
+            return clean[len(WORKING_DIR) + 1 :]
+        # x -> content/x
+        return f"{WORKING_DIR}/{clean}"
 
     def list_dir(self, path: str):
         return self._request("GET", path)

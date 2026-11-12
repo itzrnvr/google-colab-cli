@@ -169,7 +169,12 @@ class State:
                 s = None
 
         if s is None and not ignore_missing_session:
-            typer.echo(f"[colab] Session '{name}' not found.")
+            typer.echo(
+                f"[colab] Session '{name}' not found. It is unknown locally "
+                "or its runtime is gone. List what is running with "
+                "`colab sessions`, or create one with `colab new -s <name>`.",
+                err=True,
+            )
             raise typer.Exit(1)
         return s
 
@@ -232,7 +237,17 @@ class State:
                 self.store.add(s)
 
         if pruned > 0:
-            typer.echo(f"[colab] Pruned {pruned} stale local session(s).")
+            # A notification the agent needs: a runtime went away (Colab
+            # reclaims idle VMs, or the VM was stopped). It goes to stderr
+            # so it never corrupts a --json stream on stdout, and it says
+            # what to do about it.
+            typer.echo(
+                f"[colab] Notice: {pruned} session(s) were pruned because "
+                "their runtime is gone (Colab reclaims idle VMs). Any work "
+                "that was running there is lost. Create a new one with "
+                "`colab new -s <name> --gpu T4`.",
+                err=True,
+            )
 
         return self._sessions, assignments
 
@@ -256,11 +271,12 @@ class State:
 
         if len(active_names) == 1:
             name = active_names[0]
-            typer.echo(f"[colab] Using unique session '{name}'.")
+            typer.echo(f"[colab] Using unique session '{name}'.", err=True)
             return name
         elif len(active_names) > 1:
             typer.echo(
-                f"[colab] Error: Multiple active sessions found. Specify one with -s: {', '.join(active_names)}"
+                f"[colab] Error: Multiple active sessions found. Specify one with -s: {', '.join(active_names)}",
+                err=True,
             )
             raise typer.Exit(1)
         else:

@@ -260,7 +260,14 @@ def run_command(
     ] = False,
     timeout: Annotated[
         Optional[float],
-        typer.Option("--timeout", help="Timeout in seconds for code execution"),
+        typer.Option(
+            "--timeout",
+            help=(
+                "Seconds to wait without output before failing (0 for no "
+                "limit). This is an idle limit: a run that keeps printing may "
+                "take as long as it needs, which is what a training job does."
+            ),
+        ),
     ] = 30.0,
     env: Annotated[
         Optional[List[str]],
