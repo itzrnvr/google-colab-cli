@@ -162,6 +162,18 @@ def help_command(
     """
     if not command:
         typer.echo(ctx.parent.get_help())
+        typer.echo("")
+        typer.echo(
+            "New to the CLI? `colab agent-guide` explains how to drive it "
+            "(and can hand itself over as skill data: "
+            "`colab agent-guide --json` or `--install <dir>`).",
+            err=True,
+        )
+        typer.echo(
+            "Not working? `colab doctor` checks the whole setup and prints "
+            "the commands that fix it.",
+            err=True,
+        )
         return
 
     group = ctx.parent.command

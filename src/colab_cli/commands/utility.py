@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import Optional
 
 import typer
@@ -386,7 +387,8 @@ def update_command(
     auto_update.self_install()
 
 
-def _print_resource(filename: str) -> None:
+def _read_resource(filename: str) -> Optional[str]:
+    """Read a bundled resource, or None when it is not available."""
     import importlib.resources
     import os
 
@@ -410,7 +412,11 @@ def _print_resource(filename: str) -> None:
                     content = f.read()
             except Exception:
                 pass
+    return content
 
+
+def _print_resource(filename: str) -> None:
+    content = _read_resource(filename)
     if content:
         typer.echo(content)
     else:
@@ -428,15 +434,105 @@ def skill():
     _print_resource("SKILL.md")
 
 
-def agent_guide():
-    """Print the agent operator handbook (same content as `colab skill`).
+def agent_guide(
+    quickstart: Annotated[
+        bool,
+        typer.Option(
+            "--quickstart",
+            help=(
+                "Print the short step-by-step recipe instead of the full "
+                "handbook. Start here if you have no context."
+            ),
+        ),
+    ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Emit the handbook as skill data: name, description and "
+                "content, so an agent harness can ingest it."
+            ),
+        ),
+    ] = False,
+    install: Annotated[
+        Optional[str],
+        typer.Option(
+            "--install",
+            help=(
+                "Write the handbook into an agent's skills directory as "
+                "<dir>/<skill-name>/SKILL.md and print the path."
+            ),
+        ),
+    ] = None,
+    skill_name: Annotated[
+        Optional[str],
+        typer.Option(
+            "--skill-name",
+            help="Override the skill directory name used by --install.",
+        ),
+    ] = None,
+):
+    """Explain how to drive this CLI -- as a guide, as skill data, or both.
 
     Start here when driving this CLI from a program or AI agent: auth,
     session lifecycle, the machine-readable execution interface, context
-    budgeting, safety, and recovery — one page, no guessing. For full
-    training jobs and experiment sweeps, continue with
-    docs/agent-training.md (linked from the handbook).
+    budgeting, safety, and recovery -- one page, no guessing.
+
+    - default: the full handbook.
+    - `--quickstart`: the short recipe (doctor, rent, run, collect, iterate,
+      stop) plus a symptom table.
+    - `--json`: the handbook as skill data (name, description, content), for
+      a harness that loads skills itself.
+    - `--install DIR`: write the handbook into DIR as a SKILL.md, so the
+      agent can pick it up the next time.
     """
+    from colab_cli.quickstart import QUICKSTART, skill_document
+
+    if install:
+        content = _read_resource("SKILL.md")
+        if not content:
+            typer.echo("[colab] SKILL.md content not available.", err=True)
+            raise typer.Exit(code=1)
+        doc = skill_document(content, quickstart=QUICKSTART)
+        name = skill_name or doc["name"]
+        target_dir = os.path.join(install, name)
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, "SKILL.md")
+        # The frontmatter must stay first (it is the metadata), then the
+        # short recipe -- an agent with no context reads top-down and
+        # should hit the recipe before the long handbook.
+        from colab_cli.quickstart import split_frontmatter
+
+        meta, body = split_frontmatter(content)
+        with open(target, "w", encoding="utf-8") as f:
+            if meta:
+                f.write("---\n")
+                for key, value in meta.items():
+                    f.write(f"{key}: {value}\n")
+                f.write("---\n\n")
+            f.write(QUICKSTART)
+            f.write("\n---\n\n# Full handbook\n\n")
+            f.write(body)
+        typer.echo(f"[colab] Wrote {target}")
+        typer.echo(
+            f"[colab] Point your agent at it, or copy it into your "
+            f"harness's skills directory."
+        )
+        return
+
+    if json_output:
+        import json as _json
+
+        content = _read_resource("SKILL.md") or ""
+        doc = skill_document(content, quickstart=QUICKSTART)
+        typer.echo(_json.dumps(doc, indent=2))
+        return
+
+    if quickstart:
+        typer.echo(QUICKSTART)
+        return
+
     _print_resource("SKILL.md")
 
 
