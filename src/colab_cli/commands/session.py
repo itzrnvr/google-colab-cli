@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import uuid
 from typing import Optional
+import requests
 import typer
 from typing_extensions import Annotated
 
@@ -31,6 +33,12 @@ from colab_cli.client import (
 from colab_cli.utils import get_status_code
 from colab_cli.state import SessionState
 from colab_cli.runtime import ColabRuntime
+
+logger = logging.getLogger(__name__)
+
+# How many accounts to try when the backend refuses an allocation because the
+# account's quota or concurrency limit is exhausted.
+MAX_ACCOUNT_ATTEMPTS = 5
 
 
 def _hardware_label(accelerator: str) -> str:
@@ -91,6 +99,146 @@ def resolve_runtime_options(
     return variant, accelerator, shape
 
 
+def _account_label(state) -> Optional[str]:
+    """The active account label, or ``None`` when it cannot be determined.
+
+    Defensive on purpose: the account label ends up in a pydantic model field
+    (``SessionState.account``) and in comparisons against other accounts, so
+    a non-string value (e.g. a test double) must never reach it.
+    """
+    try:
+        label = state.current_account()
+    except Exception:
+        return None
+    return label if isinstance(label, str) and label else None
+
+
+def _adopt_existing_session(
+    name: str, variant: Variant, accelerator: Accelerator
+) -> bool:
+    """Reuse a matching live runtime instead of requesting a second one.
+
+    Requesting a second GPU runtime while one is already running hits the
+    account's concurrency limit (HTTP 412 ``Precondition Failed``) and burns
+    wall-clock time re-provisioning. Adopting the live runtime avoids both.
+
+    Returns ``True`` when a session is now available under some local name
+    and the caller should stop.
+    """
+    from colab_cli.common import state
+
+    try:
+        assignments = list(state.client.list_assignments())
+        matches = [a for a in assignments if a.accelerator == accelerator]
+    except Exception as e:
+        # The pre-flight is best effort: if the listing fails (e.g. auth not
+        # settled yet, or the backend is unreachable) fall through to the
+        # normal allocation path, which surfaces the real error.
+        logger.debug(f"Pre-flight assignment lookup failed: {e}")
+        return False
+
+    if not matches:
+        return False
+
+    assignment = matches[0]
+    local = state.store.list()
+
+    already = next(
+        (s for s in local.values() if s.endpoint == assignment.endpoint), None
+    )
+    if already is not None:
+        typer.echo(
+            f"[colab] A {accelerator.value} runtime is already running as "
+            f"session '{already.name}' ({assignment.endpoint}). Reusing it. "
+            "Pass --force-new to request a separate runtime.",
+            err=True,
+        )
+        return True
+
+    s = SessionState(
+        name=name,
+        token=assignment.runtime_proxy_info.token,
+        url=assignment.runtime_proxy_info.url,
+        endpoint=assignment.endpoint,
+        token_expires_at=assignment.runtime_proxy_info.expires_at(),
+        variant=assignment.variant.name,
+        accelerator=assignment.accelerator.value,
+        machine_shape=(
+            Shape.HIGH_RAM.name
+            if assignment.machine_shape == Shape.HIGH_RAM
+            else Shape.STANDARD.name
+        ),
+        account=_account_label(state),
+    )
+    state.store.add(s)
+    state.history.log_event(
+        name,
+        "session_created",
+        {
+            "endpoint": assignment.endpoint,
+            "variant": s.variant,
+            "accelerator": s.accelerator,
+            "machine_shape": s.machine_shape,
+            "adopted": True,
+        },
+    )
+    typer.echo(
+        f"[colab] Adopted the running {accelerator.value} runtime "
+        f"{assignment.endpoint} as session '{name}'."
+    )
+    typer.echo("[colab] Session READY.")
+    return True
+
+
+def _assign_with_failover(
+    variant: Variant, accelerator: Accelerator, shape: Optional[Shape]
+):
+    """Request an assignment, rotating accounts when the backend refuses.
+
+    Colab enforces per-Google-account limits. When the active account's daily
+    quota or GPU concurrency limit is exhausted the backend refuses the
+    allocation (HTTP 412) or rejects the accelerator (HTTP 400). If another
+    account is signed in, switch to it and retry so the work keeps moving.
+
+    An exhausted account can also manifest as the allocation request *hanging*
+    until the HTTP read timeout expires (observed in practice: the burned
+    account times out after 120 s while a healthy account answers in
+    seconds). That is treated as a refusal too, so the rotation still
+    happens.
+    """
+    from colab_cli.common import state
+
+    last_error = None
+    for _ in range(MAX_ACCOUNT_ATTEMPTS):
+        account = state.current_account()
+        try:
+            return state.client.assign(
+                uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
+            )
+        except TooManyAssignmentsError as e:
+            last_error = e
+            reason = "allocation refused (precondition failed)"
+        except ColabRequestError as e:
+            status = get_status_code(e)
+            if status not in (400, 429) or accelerator == Accelerator.NONE:
+                raise
+            last_error = e
+            reason = f"request refused (HTTP {status})"
+        except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectTimeout) as e:
+            last_error = e
+            reason = "allocation request timed out (quota may be exhausted)"
+
+        nxt = state.rotate_account(exclude=account)
+        if not nxt:
+            raise last_error
+        typer.echo(
+            f"[colab] Account '{account}' was {reason}. Switching to account "
+            f"'{nxt}' and retrying.",
+            err=True,
+        )
+    raise last_error
+
+
 def new(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -122,6 +270,16 @@ def new(
             ),
         ),
     ] = False,
+    force_new: Annotated[
+        bool,
+        typer.Option(
+            "--force-new",
+            help=(
+                "Always request a fresh runtime, even when a matching one is "
+                "already running (by default the running one is reused)."
+            ),
+        ),
+    ] = False,
 ):
     """Create a new session"""
     from colab_cli.common import state
@@ -136,11 +294,14 @@ def new(
             err=True,
         )
 
+    # Reuse a live runtime with the same hardware instead of asking for a
+    # second one and getting refused by the account's concurrency limit.
+    if not force_new and _adopt_existing_session(name, variant, accelerator):
+        return
+
     typer.echo(f"[colab] Creating session '{name}'...")
     try:
-        res = state.client.assign(
-            uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
-        )
+        res = _assign_with_failover(variant, accelerator, shape)
     except TooManyAssignmentsError:
         # The Colab backend returns 412 when it refuses the assignment. This
         # usually means too many active sessions, or a temporary usage or
@@ -201,6 +362,7 @@ def new(
         machine_shape=(
             Shape.HIGH_RAM.name if shape == Shape.HIGH_RAM else Shape.STANDARD.name
         ),
+        account=_account_label(state),
     )
 
     state.store.add(s)
@@ -399,7 +561,15 @@ def stop(
     except Exception:
         pass
 
-    state.client.unassign(s.endpoint)
+    # Unassign under the account that owns the runtime: a session created
+    # after a failover lives on a different account and is invisible to the
+    # active one.
+    owner = s.account if isinstance(s.account, str) and s.account else None
+    current = _account_label(state)
+    if owner and current and owner != current:
+        state.client_for(owner).unassign(s.endpoint)
+    else:
+        state.client.unassign(s.endpoint)
     state.store.remove(name)
     state.history.log_event(name, "session_terminated", {"reason": "user_requested"})
     typer.echo("[colab] Session terminated.")

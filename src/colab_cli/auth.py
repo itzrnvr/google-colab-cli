@@ -27,6 +27,14 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
+from colab_cli.accounts import (
+    DEFAULT_ACCOUNT,
+    LEGACY_TOKEN_PATH,
+    AccountError,
+    AccountStore,
+    validate_label,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +59,9 @@ PUBLIC_SCOPES = [
 ]
 
 
-TOKEN_CONFIG_PATH = os.path.expanduser("~/.config/colab-cli/token.json")
+# Legacy single-account token path. Kept as an alias of the canonical
+# definition in `colab_cli.accounts` so both spellings are byte-identical.
+TOKEN_CONFIG_PATH = LEGACY_TOKEN_PATH
 
 # Remote copy-paste OAuth flow.
 #
@@ -94,9 +104,56 @@ def _run_remote_flow(client_config: dict) -> Credentials:
     return flow.credentials
 
 
-def _get_google_auth_credentials(config_path: str) -> Credentials:
+def _decode_jwt_claims(token: str) -> dict:
+    """Best-effort decode of a JWT payload (no signature verification)."""
+    try:
+        import base64
+
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def resolve_account_email(creds: Credentials) -> Optional[str]:
+    """Best-effort lookup of the signed-in Google account's email address.
+
+    Used to label accounts so ``colab account list`` can show which Google
+    account a token belongs to. Prefers the ``email`` claim in the OIDC
+    ``id_token``; falls back to the OAuth2 userinfo endpoint.
+    """
+    try:
+        id_token = getattr(creds, "id_token", None)
+        if id_token:
+            email = _decode_jwt_claims(id_token).get("email")
+            if isinstance(email, str) and email:
+                return email
+    except Exception as e:  # pragma: no cover
+        logger.debug(f"Could not read email from id_token: {e}")
+
+    try:
+        resp = requests.AuthorizedSession(creds).get(
+            "https://www.googleapis.com/oauth2/v3/userinfo", timeout=15
+        )
+        if resp.ok:
+            email = resp.json().get("email")
+            if isinstance(email, str) and email:
+                return email
+    except Exception as e:  # pragma: no cover - network best effort
+        logger.debug(f"Could not resolve account email via userinfo: {e}")
+    return None
+
+
+def _get_google_auth_credentials(
+    config_path: str, account: Optional[str] = None
+) -> Credentials:
     """
     Retrieves credentials using standard public OAuth2 flow.
+
+    ``account`` selects which stored account to use. When ``None`` the active
+    account from the account index is used, falling back to the legacy
+    single-account token file.
     """
     client_config = None
     if os.path.exists(config_path):
@@ -119,16 +176,20 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
     creds = None
 
-    # Ensure config directory exists for the token file
-    os.makedirs(os.path.dirname(TOKEN_CONFIG_PATH), exist_ok=True)
+    store = AccountStore()
+    label = account or store.active() or DEFAULT_ACCOUNT
+    token_path = store.token_path(label)
 
-    if os.path.exists(TOKEN_CONFIG_PATH):
+    # Ensure config directory exists for the token file
+    os.makedirs(os.path.dirname(token_path), exist_ok=True)
+
+    if os.path.exists(token_path):
         try:
             creds = Credentials.from_authorized_user_file(
-                TOKEN_CONFIG_PATH, PUBLIC_SCOPES
+                token_path, PUBLIC_SCOPES
             )
         except Exception as e:
-            logger.warning(f"Failed to load token from {TOKEN_CONFIG_PATH}: {e}")
+            logger.warning(f"Failed to load token from {token_path}: {e}")
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
@@ -143,12 +204,110 @@ def _get_google_auth_credentials(config_path: str) -> Credentials:
 
         # Save the credentials for the next run
         try:
-            with open(TOKEN_CONFIG_PATH, "w") as token_file:
-                token_file.write(creds.to_json())
+            email = resolve_account_email(creds)
+            store.save_token(label, json.loads(creds.to_json()), email=email)
+            store.touch(label)
         except Exception as e:
-            logger.error(f"Failed to save token to {TOKEN_CONFIG_PATH}: {e}")
+            logger.error(f"Failed to save token to {token_path}: {e}")
 
     return creds
+
+
+def sign_in_account(
+    label: str,
+    config_path: Optional[str] = None,
+    store: Optional[AccountStore] = None,
+) -> str:
+    """Run the OAuth flow for a new account and store it under ``label``.
+
+    Returns the detected Google account email (empty string when it could not
+    be resolved). The token is written to the account's own file so several
+    accounts can be signed in side by side.
+    """
+    if not config_path:
+        config_path = os.path.expanduser("~/.colab-cli-oauth-config.json")
+    store = store or AccountStore()
+
+    client_config = None
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            client_config = json.load(f)
+    else:
+        try:
+            config_resource = resources.files("colab_cli").joinpath("oauth_config.json")
+            if config_resource.is_file():
+                client_config = json.loads(config_resource.read_text())
+        except Exception as e:
+            logger.debug(f"Failed to load inlined config: {e}")
+
+    if not client_config:
+        raise FileNotFoundError(
+            f"Client OAuth config not found at {config_path} and no inlined config "
+            "available. Please provide a valid path via -c/--client-oauth-config."
+        )
+
+    creds = _run_remote_flow(client_config)
+    email = resolve_account_email(creds) or ""
+    store.save_token(label, json.loads(creds.to_json()), email=email or None)
+    store.touch(label)
+    return email
+
+
+def resolve_stored_account_email(
+    label: str,
+    store: Optional[AccountStore] = None,
+) -> Optional[str]:
+    """Look up (and cache) the Google account email behind a stored token.
+
+    Used by ``colab account list`` so accounts can be told apart. Resolving
+    the email needs a network call, so it is done on demand rather than on
+    every credential load.
+    """
+    store = store or AccountStore()
+    known = store.meta(label).get("email")
+    if known:
+        return known
+    token_path = store.token_path(label)
+    if not os.path.exists(token_path):
+        return None
+    try:
+        with open(token_path, "r", encoding="utf-8") as f:
+            token = json.load(f)
+        creds = Credentials.from_authorized_user_info(token, PUBLIC_SCOPES)
+        email = resolve_account_email(creds)
+    except Exception as e:
+        logger.debug(f"Could not resolve the email for account {label}: {e}")
+        return None
+    if email:
+        store.register(label, email=email)
+    return email
+
+
+def import_account_token(
+    label: str,
+    token_path: str,
+    store: Optional[AccountStore] = None,
+) -> str:
+    """Register an existing OAuth token file under ``label``.
+
+    Lets an already-signed-in account be added without running the OAuth
+    flow again (e.g. a token file that was backed up earlier). Returns the
+    detected account email, or an empty string.
+    """
+    store = store or AccountStore()
+    with open(token_path, "r", encoding="utf-8") as f:
+        token = json.load(f)
+
+    email = ""
+    try:
+        creds = Credentials.from_authorized_user_info(token, PUBLIC_SCOPES)
+        email = resolve_account_email(creds) or ""
+    except Exception as e:
+        logger.debug(f"Could not resolve the email for the imported token: {e}")
+
+    store.save_token(label, token, email=email or None)
+    store.touch(label)
+    return email
 
 
 def _get_adc_credentials() -> Credentials:
@@ -222,6 +381,7 @@ def _get_adc_credentials() -> Credentials:
 def get_credentials(
     config_path: Optional[str] = None,
     provider: AuthProvider = AuthProvider.OAUTH2,
+    account: Optional[str] = None,
 ) -> requests.AuthorizedSession:
     """Unified entry point for retrieving an authorized session.
 
@@ -229,11 +389,18 @@ def get_credentials(
       config_path: Path to the OAuth2 client config JSON. Only consulted when
         ``provider`` is ``OAUTH2``.
       provider: Which authentication strategy to use.
+      account: Which stored account to sign in as. ``None`` means "use the
+        active account" (falling back to the legacy single-token file).
     """
     if provider == AuthProvider.OAUTH2:
         if not config_path:
             config_path = os.path.expanduser("~/.colab-cli-oauth-config.json")
-        creds = _get_google_auth_credentials(config_path)
+        if account:
+            try:
+                validate_label(account)
+            except AccountError as e:
+                raise ValueError(str(e)) from e
+        creds = _get_google_auth_credentials(config_path, account=account)
     elif provider == AuthProvider.ADC:
         creds = _get_adc_credentials()
     else:

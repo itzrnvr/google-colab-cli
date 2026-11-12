@@ -106,6 +106,7 @@ def announce_upgrade(
     install_cmd: str,
     *,
     show_disable_hint: bool = False,
+    err: bool = False,
 ) -> None:
     """Print the upgrade banner.
 
@@ -114,20 +115,30 @@ def announce_upgrade(
     banner is shown unsolicited (the daily background fetch and the cached
     banner on subsequent invocations); explicit ``colab update`` calls
     omit it because the user already opted in to seeing the result.
+
+    ``err`` sends the banner to stderr. The unsolicited background banner uses
+    this so that stdout stays machine-parseable: an agent piping
+    ``colab exec --json`` into a JSON parser must not have an upgrade notice
+    injected into the stream.
     """
     typer.echo(
-        f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})"
+        f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})",
+        err=err,
     )
     if is_self_install_supported() and ("pip" in install_cmd or "uv" in install_cmd):
-        typer.echo("[colab] You can run 'colab update --install' to upgrade in place.")
-    typer.echo(f"[colab] Run '{install_cmd}' to update.")
+        typer.echo(
+            "[colab] You can run 'colab update --install' to upgrade in place.",
+            err=err,
+        )
+    typer.echo(f"[colab] Run '{install_cmd}' to update.", err=err)
     if show_disable_hint:
         typer.echo(
             "[colab] To silence this check, set "
             '"enable_update_check": false in '
-            "~/.config/colab-cli/settings.json"
+            "~/.config/colab-cli/settings.json",
+            err=err,
         )
-    typer.echo("")
+    typer.echo("", err=err)
 
 
 # ---------- Orchestration -----------------------------------------------
@@ -167,6 +178,8 @@ def check_for_updates(quiet: bool = False) -> None:
                 current,
                 _get_install_command(),
                 show_disable_hint=quiet,
+                # The unsolicited background check must not pollute stdout.
+                err=quiet,
             )
         elif not quiet:
             suffix = f", latest: {pypi_v}" if pypi_v else ""
@@ -214,6 +227,7 @@ def maybe_show_cached_banner(settings: Settings) -> None:
         current,
         "colab update",
         show_disable_hint=True,
+        err=True,
     )
 
 

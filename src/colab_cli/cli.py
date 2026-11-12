@@ -23,7 +23,17 @@ from typing_extensions import Annotated
 from colab_cli import auto_update
 from colab_cli.auth import AuthProvider
 from colab_cli.common import state, setup_logging
-from colab_cli.commands import session, execution, files, automation, run, ssh, utility, usage
+from colab_cli.commands import (
+    account,
+    automation,
+    execution,
+    files,
+    run,
+    session,
+    ssh,
+    usage,
+    utility,
+)
 
 
 class AlphabeticalGroup(TyperGroup):
@@ -82,6 +92,17 @@ def callback(
             case_sensitive=False,
         ),
     ] = AuthProvider.OAUTH2,
+    account: Annotated[
+        Optional[str],
+        typer.Option(
+            "--account",
+            help=(
+                "Which signed-in Google account to use for this command. "
+                "Use `colab account list` to see the stored accounts. "
+                "Defaults to the active account."
+            ),
+        ),
+    ] = None,
 ):
     """
     Colab CLI global configuration.
@@ -90,6 +111,14 @@ def callback(
     state.config_path = config
     state.logtostderr = logtostderr
     state.auth_provider = auth
+    if account:
+        from colab_cli.accounts import AccountError, validate_label
+
+        try:
+            state.account = validate_label(account)
+        except AccountError as e:
+            typer.echo(f"[colab] {e}", err=True)
+            raise typer.Exit(2)
     setup_logging(logtostderr)
 
     # Daily fetch + cached banner on every invocation.
@@ -152,6 +181,7 @@ automation.register(app)
 run.register(app)
 ssh.register(app)
 utility.register(app)
+account.register(app)
 usage.register(app)
 
 

@@ -35,6 +35,11 @@ class SessionState(BaseModel):
     session_id: Optional[str] = None
     last_execution: Optional[Tuple[str, Optional[str], str]] = None
     running: Optional[str] = None
+    # Which signed-in Google account owns this runtime. Sessions live under
+    # different accounts when the CLI rotates to a fresh one (see
+    # `colab account`), and the runtime must be looked up under the account
+    # that created it or it looks "missing" and gets pruned.
+    account: Optional[str] = None
 
 
 class Settings(BaseModel):

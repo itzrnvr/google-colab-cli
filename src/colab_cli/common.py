@@ -20,10 +20,13 @@ from typing import Optional
 
 import typer
 
+from colab_cli.accounts import DEFAULT_ACCOUNT, AccountError, AccountStore
 from colab_cli.auth import AuthProvider, get_credentials
 from colab_cli.client import Client, Prod, RuntimeProxyInfo
 from colab_cli.history import HistoryLogger
 from colab_cli.state import SessionState, StateStore, SettingsStore
+
+logger = logging.getLogger(__name__)
 
 # Headroom so a token doesn't expire mid-command.
 TOKEN_REFRESH_MARGIN = timedelta(minutes=5)
@@ -41,11 +44,53 @@ class State:
         self.config_path = None
         self.logtostderr = False
         self.auth_provider = AuthProvider.OAUTH2
+        # Explicit account override (``--account``). ``None`` means "use the
+        # active account from the account index".
+        self.account = None
         self._client = None
         self._store = None
         self._settings_store = None
         self._history = None
         self._sessions = None
+        self._accounts = None
+
+    @property
+    def accounts(self) -> AccountStore:
+        if self._accounts is None:
+            self._accounts = AccountStore()
+        return self._accounts
+
+    def current_account(self) -> str:
+        """The account label that will be used for the next request."""
+        return self.account or self.accounts.active() or DEFAULT_ACCOUNT
+
+    def use_account(self, label: str, make_active: bool = True) -> None:
+        """Sign in as ``label`` for the remainder of this invocation.
+
+        Rebuilds the API client so the next request uses the new credentials.
+        """
+        self.account = label
+        self._client = None
+        if make_active:
+            try:
+                self.accounts.set_active(label)
+            except AccountError:
+                # Not every label has a token yet; the explicit override still
+                # applies for this invocation.
+                pass
+
+    def rotate_account(self, exclude: Optional[str] = None) -> Optional[str]:
+        """Switch to the next stored account that still has a token.
+
+        Returns the new label, or ``None`` when there is no other account.
+        """
+        current = exclude or self.current_account()
+        nxt = self.accounts.next_account(exclude=current)
+        if not nxt:
+            return None
+        self.use_account(nxt)
+        self.accounts.advance_rotation(nxt)
+        return nxt
 
     @property
     def store(self):
@@ -71,10 +116,25 @@ class State:
     def client(self):
         if self._client is None:
             creds = get_credentials(
-                self.client_oauth_config, provider=self.auth_provider
+                self.client_oauth_config,
+                provider=self.auth_provider,
+                account=self.account,
             )
             self._client = Client(Prod(), creds)
         return self._client
+
+    def client_for(self, account: str) -> Client:
+        """Build an API client for ``account`` without changing any state.
+
+        Used to look up runtimes that belong to a different account than the
+        one currently active.
+        """
+        creds = get_credentials(
+            self.client_oauth_config,
+            provider=self.auth_provider,
+            account=account,
+        )
+        return Client(Prod(), creds)
 
     def prune_session(self, name: str):
         """Removes a session from local state."""
@@ -98,7 +158,9 @@ class State:
             not s.token_expires_at
             or s.token_expires_at - datetime.now(timezone.utc) <= TOKEN_REFRESH_MARGIN
         ):
-            by_endpoint = {a.endpoint: a for a in self.client.list_assignments()}
+            by_endpoint = {
+                a.endpoint: a for a in self._assignments_for(s.account)
+            }
             if s.endpoint in by_endpoint:
                 _apply_proxy_info(s, by_endpoint[s.endpoint].runtime_proxy_info)
                 self.store.add(s)
@@ -110,6 +172,21 @@ class State:
             typer.echo(f"[colab] Session '{name}' not found.")
             raise typer.Exit(1)
         return s
+
+    def _assignments_for(self, account: Optional[str] = None):
+        """List server-side assignments for ``account``.
+
+        ``account`` of ``None`` means "the currently active account". Sessions
+        created under a different account are invisible to the active
+        account's listing, so they must be queried separately.
+        """
+        if account and account != self.current_account():
+            try:
+                return self.client_for(account).list_assignments()
+            except Exception as e:
+                logger.debug(f"Could not list assignments for account {account}: {e}")
+                return []
+        return self.client.list_assignments()
 
     def sync_sessions(self):
         if self._sessions is not None:
@@ -131,6 +208,18 @@ class State:
 
         assignments = self.client.list_assignments()
         by_endpoint = {a.endpoint: a for a in assignments}
+
+        # Sessions owned by a different account (created after a failover) are
+        # not in the active account's listing; look them up under their owner.
+        current = self.current_account()
+        other_accounts = {
+            s.account
+            for s in local_sessions.values()
+            if s.account and s.account != current
+        }
+        for acct in other_accounts:
+            for a in self._assignments_for(acct):
+                by_endpoint.setdefault(a.endpoint, a)
 
         self._sessions = local_sessions
         pruned = 0

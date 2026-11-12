@@ -156,7 +156,9 @@ def test_status_json_shape(mock_common_state):
     mock_common_state.store.get.return_value = sess
     result = runner.invoke(app, ["status", "-s", "s1", "--json"])
     assert result.exit_code == 0, result.output
-    doc = json.loads(result.output)
+    # stdout must be pure JSON: notices (e.g. the upgrade banner) go to
+    # stderr so a machine-readable stream is never corrupted.
+    doc = json.loads(result.stdout)
     assert doc["name"] == "s1"
     assert doc["status"] == "IDLE"
     assert doc["kernel_id"] == "k1"
@@ -373,7 +375,7 @@ def test_large_output_gets_ref_and_fetch_roundtrips(
     # Fetch returns the complete untruncated output.
     fetch = runner.invoke(app, ["output", "-s", "s1", ref["id"]])
     assert fetch.exit_code == 0, fetch.output
-    doc = json.loads(fetch.output)
+    doc = json.loads(fetch.stdout)
     assert doc["output"]["text"] == big_text
 
 

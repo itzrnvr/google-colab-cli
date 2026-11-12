@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -97,7 +98,18 @@ def test_get_credentials_expired_token_refresh(mock_deps):
         res = get_credentials("dummy_config.json", provider=AuthProvider.OAUTH2)
 
     mock_creds.refresh.assert_called_once()
-    m_open.assert_any_call(TOKEN_CONFIG_PATH, "w")
+    # The refreshed token is persisted for the active account. The write is
+    # atomic (temp file + os.replace), so the recorded write targets
+    # "<token path>.tmp".
+    written = [
+        call.args[0]
+        for call in m_open.call_args_list
+        if len(call.args) >= 2 and call.args[1] == "w"
+    ]
+    assert any(
+        os.path.normpath(str(p)) == os.path.normpath(TOKEN_CONFIG_PATH + ".tmp")
+        for p in written
+    ), f"token was not persisted to {TOKEN_CONFIG_PATH}; writes: {written}"
     assert res == mock_deps["session"].return_value
 
 

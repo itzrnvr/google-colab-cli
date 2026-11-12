@@ -39,6 +39,11 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - **oauth2 setup**: `colab --auth=oauth2 <anything>` triggers a browser consent flow on first use (token cached at `~/.config/colab-cli/token.json`). Requires a client config at `~/.colab-cli-oauth-config.json` (or `-c PATH`). The browser step means it usually needs a human; prefer ADC for agents.
 - **Verify auth in one shot**: `colab sessions` (read-only, lists server assignments) or `colab whoami` (hidden debug command: prints the active email, scopes, audience, and expiry). When any call 401s or 403s, the cause is almost always missing credentials or scopes — `colab whoami` shows it instantly.
 - **Do NOT confuse `colab auth` with CLI authentication.** `colab auth` injects *VM-side* GCP credentials into the running kernel (so notebook code can call BigQuery/GCS); it is orthogonal to how the CLI itself authenticates. Never suggest "run `colab auth`" to fix a CLI 401/403 — that's a scope/identity problem fixed via the `gcloud` command above.
+- **Multiple accounts (per-account quotas).** Colab enforces limits **per Google account**: a daily compute quota and a concurrency limit on GPU assignments. When one account is exhausted, `colab new --gpu T4` on it fails (HTTP 412 "precondition failed"), rejects the accelerator (HTTP 400), or the allocation request simply times out — while another signed-in account still has headroom.
+  - `colab account list` shows every signed-in account, its email, and which one is active. `colab account add <label>` signs in another one (interactive browser step; the token is stored under `~/.config/colab-cli/accounts/<label>.json`). `colab account use <label>` switches; `colab account rm <label>` forgets it. `colab account add <label> --from-file <token.json>` imports an already-saved token without a browser.
+  - `colab --account <label> <cmd>` uses one account for a single command.
+  - **Automatic rotation**: when an allocation is refused (412/400/429) or times out, `colab new` switches to the next account that has a token and retries, announcing the switch on stderr. So an agent does not have to manage this by hand.
+  - Each session records the account that owns it, so `colab stop` and token refreshes go to the right account even after a rotation.
 
 ## Workflow
 
@@ -47,6 +52,8 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - Supported `--gpu`: `T4`, `L4`, `G4`, `H100`, `A100`. Supported `--tpu`: `v5e1`, `v6e1`.
 - **Gotcha**: an unrecognized `--gpu` value silently falls back to **A100** (which then usually fails the next step). A `400` on `colab new` with an accelerator means no quota/entitlement for it on this account — fall back to `--gpu T4` or omit the flag for CPU.
 - Accelerator availability is tier-gated; most accounts can only get CPU. Don't assume a GPU/TPU will allocate.
+- **A matching runtime is reused, not duplicated.** If the account already has a runtime with the requested hardware, `colab new` adopts it and says so (`Adopted the running T4 runtime …`) instead of asking for a second one — which the account's concurrency limit would refuse (HTTP 412) and which would waste time. Pass `--force-new` to insist on a fresh runtime.
+- **Quota exhaustion rotates accounts.** If the allocation is refused (412/400/429) or the request times out, the CLI switches to the next signed-in account and retries. See the authentication section above.
 
 ### Execute
 - **Preferred**: `colab exec -s <name> -f <script.py>` runs a local script on the remote VM (read locally, sent to the kernel — no manual upload needed).
@@ -62,6 +69,7 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
 - **Stream separation**: `colab run` writes its own `[colab] ...` chatter to **stderr** and the script's output to **stdout** — so `colab run job.py > out.txt` captures only the script's stdout. (`colab exec` streams the script's stdout/stderr live to your stdout/stderr.)
 - Works as a shebang: `#!/usr/bin/env -S colab run --gpu T4` makes a `chmod +x`'d `.py` a self-contained "rent a GPU, run, clean up" script. After editing CLI behavior, reinstall before testing shebangs — they resolve `colab` via `$PATH`, not the editable install.
 - A nonexistent script path exits non-zero **before** allocating a VM (no wasted compute).
+- **`--timeout` is a real wall-clock bound.** When it expires the CLI interrupts the kernel and exits non-zero, instead of letting a silent cell spin forever while the VM keeps billing compute quota. If the interrupt is not acknowledged the error says so explicitly — stop the session (`colab stop -s <name>`) to release the VM.
 
 ### Automate
 - `colab auth -s <name>` — VM-side GCP creds, needed before in-VM GCS/BigQuery calls (interactive; not agent-runnable).

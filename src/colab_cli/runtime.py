@@ -13,11 +13,26 @@
 # limitations under the License.
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 import jupyter_kernel_client
 import requests
+
+# How long to wait for the kernel to acknowledge an interrupt before giving up
+# on the worker thread and reporting the timeout.
+INTERRUPT_GRACE_SECONDS = 5.0
+
+
+class ExecutionTimeout(TimeoutError):
+    """Raised when a kernel execution exceeds its wall-clock budget.
+
+    This is deliberately *not* the same as the upstream
+    ``jupyter_kernel_client`` timeout: that one is an idle budget and, once
+    the deadline passes, degenerates into a busy spin instead of raising.
+    See ``ColabRuntime._run_with_deadline``.
+    """
 
 
 class ColabRuntime:
@@ -177,6 +192,68 @@ class ColabRuntime:
     ):
         self.kernel_client.restart(timeout=timeout)
 
+    def _interrupt_kernel(self) -> None:
+        """Best-effort interrupt of the running kernel."""
+        client = self._kernel_client
+        if client is None:
+            return
+        try:
+            client.interrupt()
+        except Exception as e:  # pragma: no cover - best effort
+            logging.debug(f"Could not interrupt kernel: {e}")
+
+    def _run_with_deadline(
+        self,
+        fn: Callable[[], Any],
+        timeout: Optional[float],
+        description: str,
+    ) -> Any:
+        """Run ``fn`` under a hard wall-clock deadline.
+
+        ``jupyter_kernel_client`` treats its ``timeout`` argument as an *idle*
+        budget: once the deadline passes it recomputes
+        ``timeout = max(0, deadline - now)`` and then loops with
+        ``wait(0)`` / ``get_msg(timeout=0)``. ``wait(0)`` returns immediately
+        and ``get_msg(timeout=0)`` raises ``Empty``, so the loop spins at
+        100% CPU and **never** raises ``TimeoutError``. The remote cell keeps
+        running (still consuming Colab compute quota) and the CLI never
+        returns.
+
+        This wrapper enforces the deadline from the outside. On expiry it
+        interrupts the kernel -- which makes the spinning poll loop observe
+        the reply and unwind -- and then raises ``ExecutionTimeout``.
+        """
+        if timeout is None:
+            return fn()
+
+        result: Dict[str, Any] = {}
+
+        def worker() -> None:
+            try:
+                result["value"] = fn()
+            except BaseException as exc:  # noqa: BLE001 - re-raised below
+                result["error"] = exc
+
+        thread = threading.Thread(target=worker, name="colab-exec", daemon=True)
+        thread.start()
+        thread.join(timeout)
+
+        if thread.is_alive():
+            self._interrupt_kernel()
+            thread.join(INTERRUPT_GRACE_SECONDS)
+            if thread.is_alive():
+                raise ExecutionTimeout(
+                    f"{description} exceeded the {timeout:g}s timeout and the "
+                    "kernel did not acknowledge the interrupt. The remote cell "
+                    "may still be running and will keep consuming compute "
+                    "quota - stop the session (`colab stop -s <name>`) to "
+                    "release it."
+                )
+
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
     def execute_code(
         self,
         code: str,
@@ -234,13 +311,21 @@ class ColabRuntime:
                         if idx < len(outputs):
                             output_hook(outputs[idx])
 
-            reply = self.kernel_client.execute_interactive(
-                code, output_hook=wrapped_output_hook, **kwargs
+            reply = self._run_with_deadline(
+                lambda: self.kernel_client.execute_interactive(
+                    code, output_hook=wrapped_output_hook, **kwargs
+                ),
+                timeout,
+                "Code execution",
             )
             # execute_interactive returns the raw reply message
             reply_content = reply["content"] if reply else {"status": "error"}
         else:
-            reply = self.kernel_client.execute(code, **kwargs)
+            reply = self._run_with_deadline(
+                lambda: self.kernel_client.execute(code, **kwargs),
+                timeout,
+                "Code execution",
+            )
             if not reply:
                 return []
             outputs = reply.get("outputs", [])
