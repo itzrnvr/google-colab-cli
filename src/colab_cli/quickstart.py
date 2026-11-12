@@ -14,7 +14,7 @@
 
 """The quick-start an agent needs, and the skill-document helpers.
 
-``colab agent-guide`` prints the full handbook (SKILL.md). This module holds
+``colab-tool agent-guide`` prints the full handbook (SKILL.md). This module holds
 the short, imperative version -- the one to read when you have no context
 and need to get a job running -- plus helpers for treating the handbook as
 skill data (parse its frontmatter, emit it as JSON, install it into an
@@ -27,21 +27,21 @@ from typing import Dict, Optional, Tuple
 # The quick-start. Written as an ordered recipe so that a model with no
 # context can follow it literally.
 QUICKSTART = """\
-# Colab CLI quick-start (for an agent)
+# colab-tool quick-start (for an agent)
 
-`colab` rents a Google Colab CPU/GPU/TPU runtime and runs code on it.
+`colab-tool` rents a Google Colab CPU/GPU/TPU runtime and runs code on it.
 Follow these steps in order. Each one says what the next is.
 
 ## 0. Check the setup (costs nothing)
 
-    colab doctor
+    colab-tool doctor
 
 It prints one verdict. If anything is broken it prints the exact commands to
 fix it, numbered. Fix them and run it again. Do not start a job otherwise.
 
 ## 1. Rent a runtime
 
-    colab new -s proj --gpu T4
+    colab-tool new -s proj --gpu T4
 
 - Always pass `-s <name>`; an auto-generated name makes later commands ambiguous.
 - `--gpu`: T4, L4, G4, H100, A100. Omit it for a CPU runtime.
@@ -51,7 +51,7 @@ fix it, numbered. Fix them and run it again. Do not start a job otherwise.
 
 ## 2. Run code
 
-    colab exec -s proj -f train.py --timeout 3600 --json
+    colab-tool exec -s proj -f train.py --timeout 3600 --json
 
 - `-f/--file` reads the script ON THIS MACHINE and sends its contents to the
   VM. It cannot run a file that only exists on the VM.
@@ -59,12 +59,12 @@ fix it, numbered. Fix them and run it again. Do not start a job otherwise.
   that prints every minute may run for hours. `0` means no limit.
 - `--json` puts exactly one JSON envelope on stdout and the raw log on
   stderr, so stdout stays parseable.
-- For a job that should clean up after itself: `colab run --gpu T4 train.py`.
+- For a job that should clean up after itself: `colab-tool run --gpu T4 train.py`.
 
 ## 3. Collect what the job produced
 
-    colab status -s proj --json --files
-    colab download -s proj model.json ./model.json
+    colab-tool status -s proj --json --files
+    colab-tool download -s proj model.json ./model.json
 
 `--files` lists /content with the paths that work, so you do not have to
 guess where the checkpoint is.
@@ -76,7 +76,7 @@ the data on it and the installed packages all stay put.
 
 ## 5. Stop the runtime
 
-    colab stop -s proj
+    colab-tool stop -s proj
 
 Always do this. A runtime left running keeps burning the account's daily
 compute quota.
@@ -85,19 +85,19 @@ compute quota.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `No active sessions found` | The runtime was reclaimed (Colab frees idle VMs) or stopped | `colab new -s proj --gpu T4` again |
-| `File or directory not found` | The path is wrong, OR the runtime is gone | `colab status -s proj` |
-| `Allocation refused (precondition failed)` | This account's GPU quota/limit is spent | The CLI already tried other accounts; add one with `colab account add <label>` |
+| `No active sessions found` | The runtime was reclaimed (Colab frees idle VMs) or stopped | `colab-tool new -s proj --gpu T4` again |
+| `File or directory not found` | The path is wrong, OR the runtime is gone | `colab-tool status -s proj` |
+| `Allocation refused (precondition failed)` | This account's GPU quota/limit is spent | The CLI already tried other accounts; add one with `colab-tool account add <label>` |
 | `No module named 'colab_cli'` | The code you sent imports the CLI's own package; it only exists locally | Remove that import |
 | The run produced no output | It went `--timeout` seconds without printing | Raise `--timeout`, or make the script print progress |
-| A large upload/download failed | The whole file goes in one base64 request | Prefer `colab install -s proj <package>` (installs on the VM) |
+| A large upload/download failed | The whole file goes in one base64 request | Prefer `colab-tool install -s proj <package>` (installs on the VM) |
 
 ## More
 
-- `colab agent-guide` -- the full handbook (this file is the short version).
-- `colab doctor --json` -- the same checks, machine-readable.
-- `colab help <command>` -- options for any command.
-- `colab account list` -- the signed-in accounts and which one is active.
+- `colab-tool agent-guide` -- the full handbook (this file is the short version).
+- `colab-tool doctor --json` -- the same checks, machine-readable.
+- `colab-tool help <command>` -- options for any command.
+- `colab-tool account list` -- the signed-in accounts and which one is active.
 """
 
 # Matches the YAML frontmatter of a skill document.

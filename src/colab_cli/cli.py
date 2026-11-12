@@ -51,11 +51,20 @@ class AlphabeticalGroup(TyperGroup):
 
 app = typer.Typer(
     help=(
-        "Colab CLI: rent Colab VMs and run code on them.\n\n"
-        "Humans: `colab new`, `colab exec -f job.py`, `colab stop`.\n"
-        "Agents/programs: run `colab agent-guide` first — one page covering "
-        "auth, sessions, machine-readable execution (--json/--stream-jsonl), "
-        "and context budgeting. Prefer `--json` flags over scraping tables."
+        "colab-tool — a CUSTOM Colab CLI (itzrnvr/google-colab-cli), not the "
+        "stock upstream package.\n\n"
+        "Rents Colab VMs and runs code on them, with extras the upstream CLI "
+        "does not have: multiple signed-in Google accounts with automatic "
+        "quota failover, `colab doctor` (one command that says what is broken "
+        "and how to fix it), machine-readable output that keeps stdout "
+        "parseable, and `colab agent-guide`, which can hand itself over as "
+        "skill data.\n\n"
+        "Humans: `colab-tool new`, `colab-tool exec -f job.py`, "
+        "`colab-tool stop`.\n"
+        "Agents/programs: run `colab-tool agent-guide` first — one page "
+        "covering auth, sessions, machine-readable execution "
+        "(--json/--stream-jsonl), and context budgeting. Prefer `--json` "
+        "flags over scraping tables."
     ),
     no_args_is_help=True,
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -164,15 +173,20 @@ def help_command(
         typer.echo(ctx.parent.get_help())
         typer.echo("")
         typer.echo(
-            "New to the CLI? `colab agent-guide` explains how to drive it "
-            "(and can hand itself over as skill data: "
-            "`colab agent-guide --json` or `--install <dir>`).",
-            err=True,
+            "This is colab-tool, a CUSTOM Colab CLI "
+            "(itzrnvr/google-colab-cli) — not the stock upstream package. "
+            "It adds multi-account support with automatic quota failover, "
+            "`doctor`, agent-friendly output, and `agent-guide`."
+        )
+        typer.echo("")
+        typer.echo(
+            "New to it? `colab-tool agent-guide` explains how to drive it, "
+            "and can hand itself over as skill data "
+            "(`--json`, or `--install <dir>`)."
         )
         typer.echo(
-            "Not working? `colab doctor` checks the whole setup and prints "
-            "the commands that fix it.",
-            err=True,
+            "Not working? `colab-tool doctor` checks the whole setup and "
+            "prints the commands that fix it."
         )
         return
 
@@ -200,6 +214,20 @@ usage.register(app)
 
 
 def main():
+    # `colab` is kept as a compatibility alias, but it is also the name of
+    # the STOCK upstream CLI -- exactly the confusion this build exists to
+    # avoid. Say so, once, quietly, on stderr.
+    import os
+    import sys
+
+    invoked_as = os.path.basename(sys.argv[0] or "").lower()
+    if invoked_as in ("colab", "colab.exe"):
+        typer.echo(
+            "[colab] Note: 'colab' is a compatibility alias for "
+            "'colab-tool', this custom build. The stock upstream CLI also "
+            "installs a 'colab'; use 'colab-tool' to be unambiguous.",
+            err=True,
+        )
     app()
 
 

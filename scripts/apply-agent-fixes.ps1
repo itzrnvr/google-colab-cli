@@ -197,6 +197,63 @@ if (-not $SkipInstall) {
     Write-Step "Skipping the install (-SkipInstall)"
 }
 
+# ------------------------------- 4. install the fork into every environment
+
+Write-Step "Installing the fork into every environment that has a colab_cli"
+
+# Find every site-packages directory that carries a colab_cli package, then
+# install this checkout (editable) into the environment it belongs to, so
+# every Python on the box runs the SAME custom build.
+$envs = @()
+foreach ($root in @('C:\', 'D:\')) {
+    Get-ChildItem $root -Directory -Recurse -Depth 6 -Force -Filter 'colab_cli' `
+        -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'site-packages\\colab_cli$' } |
+        ForEach-Object {
+            $sitePackages = Split-Path $_.FullName -Parent
+            $envRoot = Split-Path (Split-Path $sitePackages -Parent) -Parent
+            $py = Join-Path $envRoot 'Scripts\python.exe'
+            if (Test-Path $py) {
+                $envs += [pscustomobject]@{ Env = $envRoot; Python = $py }
+            }
+        }
+}
+$envs = $envs | Sort-Object Env -Unique
+
+foreach ($e in $envs) {
+    # The package needs Python >= 3.12. Older environments cannot host it;
+    # that is a fact about them, not a failure of this script.
+    $ver = & $e.Python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>&1 | Out-String
+    $ver = $ver.Trim()
+    if ($ver -match '^(\d+)\.(\d+)' -and ([int]$matches[1] -lt 3 -or ($matches[1] -eq 3 -and [int]$matches[2] -lt 12))) {
+        Write-Warn "$($e.Env) runs Python $ver (needs >= 3.12) - skipped"
+        Add-Result "install into $($e.Env)" 'warn' "python $ver < 3.12"
+        continue
+    }
+
+    # uv-made venvs often have no pip; uv can install into them directly.
+    $hasPip = $true
+    & $e.Python -m pip --version *> $null
+    if ($LASTEXITCODE -ne 0) { $hasPip = $false }
+
+    if ($hasPip) {
+        $out = & $e.Python -m pip install --disable-pip-version-check -q -e $RepoRoot 2>&1
+    } else {
+        $out = & uv pip install --python $e.Python -e $RepoRoot 2>&1
+    }
+    if ($LASTEXITCODE -ne 0) {
+        ($out | Select-Object -Last 3) | ForEach-Object { Write-Host "    $_" }
+        Write-Fail "install failed for $($e.Env)"
+        Add-Result "install into $($e.Env)" 'fail' "exit $LASTEXITCODE"
+    } else {
+        Write-Ok "$($e.Env) -> this checkout"
+        Add-Result "install into $($e.Env)" 'ok' $RepoRoot
+    }
+}
+if ($envs.Count -eq 0) {
+    Write-Warn "no other environments with colab_cli were found"
+}
+
 # ------------------------------------------------------------ verification
 
 Write-Step "Verifying"
@@ -219,8 +276,21 @@ Invoke-Check 'colab on PATH resolves to the system scripts dir' {
     }
 } | Out-Null
 
+Invoke-Check 'colab-tool is the command on PATH' {
+    $resolved = (Get-Command colab-tool -ErrorAction Stop).Source
+    if ($resolved -notlike "$SystemDir*") {
+        throw "colab-tool resolves to $resolved, expected something under $SystemDir"
+    }
+} | Out-Null
+
 Invoke-Check 'colab --help works' {
     $null = Invoke-Cli @('--help')
+} | Out-Null
+
+Invoke-Check 'colab help says this is a custom build' {
+    $out = Invoke-Cli @('help')
+    if ($out -notmatch 'CUSTOM Colab CLI') { throw "the help does not identify the build" }
+    if ($out -notmatch 'agent-guide') { throw "the help does not point at agent-guide" }
 } | Out-Null
 
 Invoke-Check 'colab account list works' {

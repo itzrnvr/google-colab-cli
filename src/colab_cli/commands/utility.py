@@ -357,9 +357,9 @@ def update_command(
         typer.Option(
             "--install",
             help=(
-                "After checking, run 'pip install -U google-colab-cli' to "
-                "upgrade the CLI in place. No-op if already up to date. "
-                "Linux only."
+                "After checking, update THIS build in place: pull the fork "
+                "and reinstall it. No-op if already up to date. Never "
+                "installs the upstream package."
             ),
         ),
     ] = False,
@@ -368,13 +368,6 @@ def update_command(
     auto_update.check_for_updates(quiet=False)
     if not install:
         return
-
-    if not auto_update.is_self_install_supported():
-        typer.echo(
-            "[colab] '--install' self-install is only supported on Linux and macOS.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
 
     # Skip the install when the current version already matches (or exceeds)
     # the latest known version, to avoid an unnecessary subprocess call.

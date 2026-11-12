@@ -1,7 +1,7 @@
 [project]
-name = "google-colab-cli"
+name = "colab-tool"
 dynamic = ["version"]
-description = "CLI for interacting with Colab."
+description = "Custom Colab CLI: rent Colab VMs and run code on them, with multi-account support, quota failover and an agent-friendly interface."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -42,6 +42,11 @@ dependencies = [
 ]
 
 [project.scripts]
+# `colab-tool` is the primary name. `colab` is kept as a compatibility
+# alias so existing scripts keep working -- but `colab` is also the name of
+# the STOCK upstream CLI, which is exactly the confusion this build exists
+# to avoid, so the alias announces itself.
+colab-tool = "colab_cli.cli:main"
 colab = "colab_cli.cli:main"
 
 [project.urls]

@@ -23,6 +23,8 @@ callback (``cli.py``) calls ``check_for_updates`` once per day and
 """
 
 import json
+import logging
+import os
 import platform
 import subprocess
 import urllib.request
@@ -36,8 +38,21 @@ import typer
 from colab_cli.common import state
 from colab_cli.state import Settings
 
-# PyPI distribution name (different from the importable package name `colab`).
-PYPI_PACKAGE_NAME = "google-colab-cli"
+logger = logging.getLogger(__name__)
+
+# Distribution name of THIS build. It is a custom fork, not the upstream
+# package, and it must never be silently replaced by the upstream one.
+PYPI_PACKAGE_NAME = "colab-tool"
+
+# The upstream project this build is based on. Its PyPI release is what the
+# update probe looks at, purely as information -- installing it would throw
+# away every custom change (multi-account support, the Windows port, the
+# agent-facing commands).
+UPSTREAM_PACKAGE_NAME = "google-colab-cli"
+
+# A human-readable name for this build, shown in the help and the banner.
+BUILD_NAME = "colab-tool"
+BUILD_DESCRIPTION = "custom Colab CLI build (itzrnvr/google-colab-cli)"
 
 
 # ---------- Version detection -------------------------------------------
@@ -51,7 +66,7 @@ def is_self_install_supported() -> bool:
 def get_app_version() -> str:
     """Return the installed package version, falling back to the git short hash."""
     try:
-        return installed_version("google-colab-cli")
+        return installed_version(PYPI_PACKAGE_NAME)
     except (PackageNotFoundError, InvalidVersion):
         pass
 
@@ -110,6 +125,11 @@ def announce_upgrade(
 ) -> None:
     """Print the upgrade banner.
 
+    For this custom build the banner is informational only: the version
+    being reported is the UPSTREAM project's, and installing it would throw
+    away every custom change. The banner therefore says which build is
+    running and how to update *this* build.
+
     ``show_disable_hint`` controls whether the trailing line that explains
     how to silence the auto-check is included. It is only added when the
     banner is shown unsolicited (the daily background fetch and the cached
@@ -122,15 +142,20 @@ def announce_upgrade(
     injected into the stream.
     """
     typer.echo(
-        f"\n[colab] A new version of Colab CLI is available: {latest} (current: {current})",
+        f"\n[colab] {BUILD_NAME} is a {BUILD_DESCRIPTION}.",
         err=err,
     )
-    if is_self_install_supported() and ("pip" in install_cmd or "uv" in install_cmd):
-        typer.echo(
-            "[colab] You can run 'colab update --install' to upgrade in place.",
-            err=err,
-        )
-    typer.echo(f"[colab] Run '{install_cmd}' to update.", err=err)
+    typer.echo(
+        f"[colab] Upstream {UPSTREAM_PACKAGE_NAME} has a newer release "
+        f"available: {latest} (current: {current}).",
+        err=err,
+    )
+    typer.echo(
+        "[colab] To update THIS build: `colab-tool update --install` "
+        "(pulls the fork and reinstalls it). Installing the upstream package "
+        "would replace the custom build.",
+        err=err,
+    )
     if show_disable_hint:
         typer.echo(
             "[colab] To silence this check, set "
@@ -145,10 +170,19 @@ def announce_upgrade(
 
 
 def _get_install_command() -> str:
-    """Return the recommended installation command based on the environment."""
+    """Return the recommended installation command based on the environment.
+
+    For this custom build the command must reinstall *this* project, never
+    the upstream package -- installing that would replace the custom build
+    with the stock one.
+    """
     import sys
     from itertools import pairwise
     from pathlib import Path
+
+    checkout = find_source_checkout()
+    if checkout:
+        return f"pip install -e {checkout}"
 
     # Path.parts is separator-aware: backslashes on Windows, so a raw
     # "/uv/tools/" substring never matches "%APPDATA%\\uv\\tools\\...".
@@ -250,17 +284,67 @@ def run_background_check() -> None:
 # ---------- Self-install ------------------------------------------------
 
 
+def find_source_checkout() -> Optional[str]:
+    """The git checkout this build was installed from, if it can be found.
+
+    The custom build is installed editable from its checkout, so the package
+    directory sits inside the repository and the repository root can be found
+    by walking up to the directory that holds ``.git``.
+    """
+    try:
+        import importlib.resources
+
+        pkg_dir = importlib.resources.files("colab_cli")
+        # <checkout>/src/colab_cli -> <checkout>
+        candidate = os.path.abspath(
+            os.path.join(str(pkg_dir), os.pardir, os.pardir)
+        )
+        while candidate and candidate != os.path.dirname(candidate):
+            if os.path.isdir(os.path.join(candidate, ".git")):
+                return candidate
+            candidate = os.path.dirname(candidate)
+    except Exception as e:  # pragma: no cover
+        logger.debug(f"Could not locate the source checkout: {e}")
+    return None
+
+
 def self_install() -> None:
-    """Upgrade the CLI in place, detecting uv vs pip."""
+    """Update THIS build in place: pull the fork and reinstall it.
+
+    Never installs the upstream package -- that would silently replace the
+    custom build with the stock one and lose every local change.
+    """
     import sys
 
-    # If the executable path contains "/uv/", we assume it was installed via
-    # `uv tool install` and use `uv` to upgrade it.
-    if "/uv/tools/" in sys.executable:
-        cmd = ["uv", "tool", "install", "-U", PYPI_PACKAGE_NAME]
-    else:
-        cmd = [sys.executable, "-m", "pip", "install", "-U", PYPI_PACKAGE_NAME]
+    checkout = find_source_checkout()
+    if not checkout:
+        typer.echo(
+            "[colab] This is a custom build and its source checkout could not "
+            "be located, so it will not be updated automatically.",
+            err=True,
+        )
+        typer.echo(
+            f"[colab] Do NOT run `pip install -U {UPSTREAM_PACKAGE_NAME}` -- "
+            "that would replace the custom build with the upstream one.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
+    typer.echo(f"[colab] Updating the custom build from {checkout}")
+    pull = subprocess.run(
+        ["git", "-C", checkout, "pull", "--ff-only"],
+        capture_output=True,
+        encoding="utf-8",
+    )
+    typer.echo(pull.stdout.strip() or pull.stderr.strip())
+    if pull.returncode != 0:
+        typer.echo(
+            "[colab] git pull failed -- resolve it in the checkout and retry.",
+            err=True,
+        )
+        raise typer.Exit(code=pull.returncode)
+
+    cmd = [sys.executable, "-m", "pip", "install", "-e", checkout]
     typer.echo(f"[colab] Running: {' '.join(cmd)}")
     result = subprocess.run(cmd)
     if result.returncode != 0:

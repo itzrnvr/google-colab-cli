@@ -129,16 +129,14 @@ def test_pypi_upgrade_uses_pip_hint(mocker, app_version, fake_settings, mock_pyp
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
-    assert "You can run 'colab update --install' to upgrade in place." in result.output
-    assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
+    assert "To update THIS build: `colab-tool update --install`" in result.output
+    # The upstream package must never be offered as the thing to install:
+    # that would replace the custom build with the stock one.
+    assert "Run 'pip install --upgrade google-colab-cli' to update." not in result.output
 
-    idx_install = result.output.find(
-        "You can run 'colab update --install' to upgrade in place."
-    )
-    idx_pip = result.output.find(
-        "Run 'pip install --upgrade google-colab-cli' to update."
-    )
-    assert idx_install < idx_pip
+    idx_build = result.output.find("To update THIS build")
+    idx_upstream = result.output.find("Upstream google-colab-cli has a newer release")
+    assert idx_upstream < idx_build
 
 
 def test_pypi_upgrade_uses_uv_hint(mocker, app_version, fake_settings, mock_pypi):
@@ -153,14 +151,9 @@ def test_pypi_upgrade_uses_uv_hint(mocker, app_version, fake_settings, mock_pypi
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
-    assert "You can run 'colab update --install' to upgrade in place." in result.output
-    assert "Run 'uv tool install -U google-colab-cli' to update." in result.output
-
-    idx_install = result.output.find(
-        "You can run 'colab update --install' to upgrade in place."
-    )
-    idx_uv = result.output.find("Run 'uv tool install -U google-colab-cli' to update.")
-    assert idx_install < idx_uv
+    assert "To update THIS build: `colab-tool update --install`" in result.output
+    # Never offer the upstream package as the thing to install.
+    assert "Run 'uv tool install -U google-colab-cli' to update." not in result.output
 
 
 def test_pypi_upgrade_uses_pip_hint_macos(
@@ -175,16 +168,14 @@ def test_pypi_upgrade_uses_pip_hint_macos(
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
-    assert "You can run 'colab update --install' to upgrade in place." in result.output
-    assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
+    assert "To update THIS build: `colab-tool update --install`" in result.output
+    # The upstream package must never be offered as the thing to install:
+    # that would replace the custom build with the stock one.
+    assert "Run 'pip install --upgrade google-colab-cli' to update." not in result.output
 
-    idx_install = result.output.find(
-        "You can run 'colab update --install' to upgrade in place."
-    )
-    idx_pip = result.output.find(
-        "Run 'pip install --upgrade google-colab-cli' to update."
-    )
-    assert idx_install < idx_pip
+    idx_build = result.output.find("To update THIS build")
+    idx_upstream = result.output.find("Upstream google-colab-cli has a newer release")
+    assert idx_upstream < idx_build
 
 
 def test_pypi_upgrade_uses_pip_hint_windows(
@@ -199,10 +190,10 @@ def test_pypi_upgrade_uses_pip_hint_windows(
     result = runner.invoke(app, ["update"])
     assert result.exit_code == 0
     assert "available: 1.1.0 (current: 1.0.0)" in result.output
-    assert (
-        "You can run 'colab update --install' to upgrade in place." not in result.output
-    )
-    assert "Run 'pip install --upgrade google-colab-cli' to update." in result.output
+    # The fork update path works on every platform, including Windows.
+    assert "To update THIS build: `colab-tool update --install`" in result.output
+    # The upstream package must never be offered as the thing to install.
+    assert "install --upgrade google-colab-cli" not in result.output
 
 
 def test_explicit_update_omits_disable_hint(app_version, fake_settings, mock_pypi):
@@ -464,90 +455,109 @@ def test_install_flag_default_does_not_install(
     assert run.call_count == 0
 
 
-def test_install_flag_runs_pip_install_upgrade(
+def test_install_flag_updates_the_fork_from_its_checkout(
     mocker, app_version, fake_settings, mock_pypi
 ):
-    """`colab update --install` shells out to `pip install -U google-colab-cli`
-    when PyPI reports a newer version."""
+    """`colab update --install` pulls the fork and reinstalls it.
+
+    It must NOT run `pip install -U google-colab-cli`: that would replace
+    this custom build with the stock upstream one and lose every local
+    change.
+    """
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
+    mocker.patch(
+        "colab_cli.auto_update.find_source_checkout", return_value="/src/checkout"
+    )
     mocker.patch("sys.executable", "/usr/bin/python")
     run = mocker.patch(
         "colab_cli.auto_update.subprocess.run",
-        return_value=mocker.Mock(returncode=0),
+        return_value=mocker.Mock(returncode=0, stdout="", stderr=""),
     )
 
     result = runner.invoke(app, ["update", "--install"])
     assert result.exit_code == 0
-    assert run.call_count == 1
-    args, _ = run.call_args
-    # Use sys.executable to avoid PATH ambiguity / virtualenv mixups.
-    cmd = args[0]
-    assert cmd == ["/usr/bin/python", "-m", "pip", "install", "-U", "google-colab-cli"]
+
+    cmds = [call.args[0] for call in run.call_args_list]
+    # The fork is pulled, then reinstalled in place.
+    assert ["git", "-C", "/src/checkout", "pull", "--ff-only"] in cmds
+    assert ["/usr/bin/python", "-m", "pip", "install", "-e", "/src/checkout"] in cmds
+    # Never the upstream package.
+    for cmd in cmds:
+        assert "google-colab-cli" not in " ".join(cmd)
 
 
-def test_install_flag_runs_uv_tool_install(
+def test_install_flag_never_installs_the_upstream_package(
     mocker, app_version, fake_settings, mock_pypi
 ):
-    """`colab update --install` shells out to `uv tool install -U google-colab-cli`
-    when sys.executable contains '/uv/'."""
+    """The upstream package must not appear in any install command."""
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
     mocker.patch(
-        "sys.executable", "/home/user/.local/share/uv/tools/google-colab-cli/bin/python"
+        "colab_cli.auto_update.find_source_checkout", return_value="/src/checkout"
     )
     run = mocker.patch(
         "colab_cli.auto_update.subprocess.run",
-        return_value=mocker.Mock(returncode=0),
+        return_value=mocker.Mock(returncode=0, stdout="", stderr=""),
     )
 
-    result = runner.invoke(app, ["update", "--install"])
-    assert result.exit_code == 0
-    assert run.call_count == 1
-    args, _ = run.call_args
-    cmd = args[0]
-    assert cmd == ["uv", "tool", "install", "-U", "google-colab-cli"]
+    runner.invoke(app, ["update", "--install"])
+    for call in run.call_args_list:
+        assert "google-colab-cli" not in " ".join(call.args[0])
 
 
-def test_install_flag_errors_on_unsupported_platform(
+def test_install_flag_errors_when_the_checkout_cannot_be_found(
     mocker, app_version, fake_settings, mock_pypi
 ):
-    """`--install` is gated to Linux and macOS; on other platforms the command must
-    exit non-zero with an explanatory message and skip the pip subprocess."""
+    """With no checkout to update from, refuse rather than guess.
+
+    Falling back to `pip install -U google-colab-cli` here would silently
+    downgrade the custom build to the stock one.
+    """
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.auto_update.platform.system", return_value="Windows")
+    mocker.patch(
+        "colab_cli.auto_update.find_source_checkout", return_value=None
+    )
     run = mocker.patch("colab_cli.auto_update.subprocess.run")
 
     result = runner.invoke(app, ["update", "--install"])
     assert result.exit_code != 0
     assert run.call_count == 0
-    assert "only supported on Linux and macOS" in result.output
+    assert "custom build" in result.output
 
 
-def test_install_flag_runs_on_macos(mocker, app_version, fake_settings, mock_pypi):
-    """`colab update --install` shells out to pip/uv when running on macOS."""
+def test_install_flag_runs_on_windows(
+    mocker, app_version, fake_settings, mock_pypi
+):
+    """The fork update path is platform independent -- Windows included."""
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.auto_update.platform.system", return_value="Darwin")
-    mocker.patch("sys.executable", "/usr/bin/python")
+    mocker.patch("colab_cli.auto_update.platform.system", return_value="Windows")
+    mocker.patch(
+        "colab_cli.auto_update.find_source_checkout", return_value="C:/src/checkout"
+    )
+    mocker.patch("sys.executable", "C:/Python313/python.exe")
     run = mocker.patch(
         "colab_cli.auto_update.subprocess.run",
-        return_value=mocker.Mock(returncode=0),
+        return_value=mocker.Mock(returncode=0, stdout="", stderr=""),
     )
 
     result = runner.invoke(app, ["update", "--install"])
     assert result.exit_code == 0
-    assert run.call_count == 1
-    args, _ = run.call_args
-    cmd = args[0]
-    assert cmd == ["/usr/bin/python", "-m", "pip", "install", "-U", "google-colab-cli"]
+    cmds = [call.args[0] for call in run.call_args_list]
+    assert [
+        "C:/Python313/python.exe",
+        "-m",
+        "pip",
+        "install",
+        "-e",
+        "C:/src/checkout",
+    ] in cmds
 
 
 def test_install_flag_no_op_when_already_up_to_date(
@@ -569,14 +579,16 @@ def test_install_flag_no_op_when_already_up_to_date(
 def test_install_flag_propagates_pip_failure(
     mocker, app_version, fake_settings, mock_pypi
 ):
-    """If `pip install -U` exits non-zero, `colab update --install` must too."""
+    """If the reinstall exits non-zero, `colab update --install` must too."""
     app_version("1.0.0")
     mock_pypi({"info": {"version": "1.1.0"}})
     fake_settings()
-    mocker.patch("colab_cli.auto_update.platform.system", return_value="Linux")
+    mocker.patch(
+        "colab_cli.auto_update.find_source_checkout", return_value="/src/checkout"
+    )
     mocker.patch(
         "colab_cli.auto_update.subprocess.run",
-        return_value=mocker.Mock(returncode=2),
+        return_value=mocker.Mock(returncode=2, stdout="", stderr=""),
     )
 
     result = runner.invoke(app, ["update", "--install"])

@@ -74,11 +74,11 @@ def test_agent_guide_quickstart_is_a_recipe():
     text = result.stdout
     # The recipe must name the actual commands, in order.
     for fragment in [
-        "colab doctor",
-        "colab new -s proj",
-        "colab exec -s proj",
-        "colab status -s proj",
-        "colab stop -s proj",
+        "colab-tool doctor",
+        "colab-tool new -s proj",
+        "colab-tool exec -s proj",
+        "colab-tool status -s proj",
+        "colab-tool stop -s proj",
     ]:
         assert fragment in text, f"missing {fragment!r} from the quick-start"
 
@@ -115,7 +115,7 @@ def test_agent_guide_install_writes_a_skill_file(tmp_path):
     assert content.startswith("---\n")
     assert "name: colab-operator" in content
     # The quick-start comes before the long handbook.
-    assert content.index("colab doctor") < content.index("# Full handbook")
+    assert content.index("colab-tool doctor") < content.index("# Full handbook")
 
 
 def test_agent_guide_install_can_rename_the_skill(tmp_path):

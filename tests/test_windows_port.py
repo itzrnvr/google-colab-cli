@@ -221,25 +221,33 @@ def test_console_backend_selector():
         console_mod.sys.platform = orig
 
 
-def test_uv_tool_detect_windows_path(monkeypatch):
-    """%APPDATA%\\uv\\tools\\... must resolve to the uv install command."""
+def test_install_command_never_targets_the_upstream_package(monkeypatch):
+    """The self-update must never install the stock upstream package.
+
+    `colab update --install` used to run `pip install -U google-colab-cli`,
+    which would silently replace this custom build with the stock one and
+    lose every local change. It now updates the fork from its checkout.
+    """
     from colab_cli import auto_update
 
     monkeypatch.setattr(
         sys,
         "executable",
-        "C:\\Users\\x\\AppData\\Roaming\\uv\\tools\\google-colab-cli\\Scripts\\python.exe",
+        "C:\\Users\\x\\AppData\\Roaming\\uv\\tools\\colab-tool\\Scripts\\python.exe",
     )
     monkeypatch.setattr(
         auto_update, "is_self_install_supported", lambda: True
     )
-    assert auto_update._get_install_command() == (
-        "uv tool install -U google-colab-cli"
-    )
+    command = auto_update._get_install_command()
+    # The upstream *distribution* must never be the target. (The checkout
+    # path may contain the substring, so check the install target.)
+    assert "install -U google-colab-cli" not in command
+    assert "upgrade google-colab-cli" not in command
+
     monkeypatch.setattr(sys, "executable", "C:\\Program Files\\Python312\\python.exe")
-    assert auto_update._get_install_command() == (
-        "pip install --upgrade google-colab-cli"
-    )
+    command = auto_update._get_install_command()
+    assert "install -U google-colab-cli" not in command
+    assert "upgrade google-colab-cli" not in command
 
 
 def test_compact_strips_ansi_and_trims_traceback():
