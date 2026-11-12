@@ -44,6 +44,30 @@ by running `uv tool install google-colab-cli` or `pip install google-colab-cli`.
   - `colab --account <label> <cmd>` uses one account for a single command.
   - **Automatic rotation**: when an allocation is refused (412/400/429) or times out, `colab new` switches to the next account that has a token and retries, announcing the switch on stderr. So an agent does not have to manage this by hand.
   - Each session records the account that owns it, so `colab stop` and token refreshes go to the right account even after a rotation.
+- **Signing in needs a real TTY.** `colab account add` runs the copy-paste OAuth flow and calls `input()` for the authorization code; in a piped shell stdin hits EOF and the sign-in dies right after printing the URL. Use the psmux helper (see below) or `psmux attach` for it.
+
+## When a command must outlive the shell (psmux)
+
+Two CLI operations need more than a piped shell can give:
+
+- **The OAuth sign-in** above — it needs a PTY for the code prompt.
+- **A long job** (`colab run`, `colab exec` on a multi-hour script). In a plain shell the caller blocks and dies with it; in a psmux session the job keeps running and its output can be collected in a later step instead of re-running it (re-running is what burns quota and context).
+
+`scripts\colab-psmux.ps1` wraps this:
+
+```bash
+# sign in an account in a real PTY (prints the URL, then paste the code)
+scripts/colab-psmux.ps1 auth work
+scripts/colab-psmux.ps1 auth work -Code 4/0Abc...     # or paste it yourself
+
+# run a job that outlives the current tool call
+scripts/colab-psmux.ps1 job train exec -s train -f job.py --json
+scripts/colab-psmux.ps1 log train      # tail the output later
+scripts/colab-psmux.ps1 list           # sessions + logs
+scripts/colab-psmux.ps1 kill train     # tear it down
+```
+
+The job's stdout+stderr and its exit code land in `~/.config/colab-cli/psmux-logs/<session>.log`, so a later step reads the result instead of re-running the command.
 
 ## Workflow
 
