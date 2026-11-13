@@ -149,6 +149,78 @@ Remote paths: the contents API is rooted at the notebook root but the VM's
 working directory is `/content`, so `model.json` and `content/model.json` name
 the same file and both work.
 
+## A successful tool call is NOT a successful run
+
+**This is the most expensive mistake an agent makes here.** The usual failure:
+launch the run, the tool returns successfully, the agent assumes it worked and
+moves on — while the run actually died with a traceback in the output nobody
+read. Then an hour of wall-clock and Colab quota is spent on a job that failed
+in the first thirty seconds.
+
+**The failure is almost always IN THE OUTPUT, not in the tool's return
+value.** Read it, every time:
+
+| You ran | What the return value tells you | Where the real failure hides |
+|---|---|---|
+| `colab-tool exec --json` | one envelope on stdout | `cells[].ok` and `cells[].outputs[]` — an `output_type: "error"` entry carries the traceback |
+| MCP `colab_notebook_run_cell` | `[cell 0 id=… status=ok]` — **`status=ok` means the CALL worked, not that the cell did** | `colab_notebook_read --include_outputs` → look for `output_type: error`, a traceback |
+| MCP `colab_notebook_run_all` | `"Ran 2 cell(s); 0 failed"` | check the count AND read the outputs |
+| MCP `colab_job_start` | "Started job <id>" — **that is not a result at all** | `colab_job_logs` → scan for `Traceback`, `Error`, `CUDA out of memory`, `Killed`; and check `exit_code` |
+| `colab-tool run` | the exit code | non-zero on an uncaught exception, but read the output too |
+
+Concrete habit — after **every** run: (1) read the outputs, (2) scan for
+`Traceback`, `Error`, `OutOfMemory`, `Killed`, and (3) look for the script's
+**own success marker**. A training script that prints `TRAINING DONE` and one
+that dies with a CUDA OOM both return a successful tool call; only the output
+tells them apart. If the script has no explicit success marker, add one — it
+is the cheapest insurance in the whole loop.
+
+Corollary: if a run is supposed to take minutes, do not conclude it is still
+running because the tool call returned. Poll it, and read the log each time.
+
+## Moving big files: Google Drive
+
+The contents API takes a whole file as one base64 request. Measured: **50 MB
+works, 100 MB is aborted** by the host (`ConnectionAbortedError 10053`) — the
+same limit upstream has on Linux. Uploads above 16 MB are now chunked and
+the size is verified afterwards, so the CLI copes; for genuinely large
+artefacts (multi-GB checkpoints, datasets) Drive is the better channel.
+
+**Three Google accounts are mounted on this machine** (Google Drive for
+Desktop, mirror mode):
+
+| Drive | Account | Same as CLI account |
+|---|---|---|
+| **G:** | cinnybun02@gmail.com | `account2` |
+| **H:** | sanskar9797@gmail.com | — |
+| **I:** | stupidity97001@gmail.com | `default` |
+
+Drive for Desktop is **not running by default** — start it if a drive letter
+is missing:
+
+```
+& "C:\Program Files\Google\Drive File Stream\133.0.2.0\GoogleDriveFS.exe"
+```
+
+**Upload (local → VM):** put the file in the local Drive folder (e.g.
+`I:\My Drive\Colab-MCP\data.bin`), then on the VM copy it out of the mounted
+Drive into `/content`. The copy happens on the VM — no local transfer, no
+base64, no size limit. Mounting Drive needs one human consent click
+(`colab-tool drivemount`, or the MCP's `colab_drive_mount_start` /
+`colab_drive_mount_finish` pair).
+
+**Download (VM → local):** on the VM, copy the artefact into the mounted
+Drive; Drive syncs it down to the local `G:`/`H:`/`I:` folder by itself.
+
+**Never transfer packages or wheels** — `colab-tool install -s proj <pkg>`
+installs on the VM directly.
+
+| Size | Route |
+|---|---|
+| < 50 MB | `colab-tool upload` / `download` — direct |
+| 50 MB – a few GB | chunked upload (built in) |
+| a few GB and up | Google Drive |
+
 ## Safety
 - **Always `colab-tool stop -s <name>` when done** — idle VMs burn compute units. `colab-tool run` (without `--keep`) self-cleans even if the script errors.
 - Local state lives in `~/.config/colab-cli/sessions.json` (settings in `settings.json`, history in `history/*.jsonl`). Don't edit by hand.
