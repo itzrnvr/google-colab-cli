@@ -153,6 +153,58 @@ def display_output(out, output_image=None, force_stderr: bool = False):
         pass
 
 
+# A script this big, or with a line this long, is too big to ship inline as
+# one cell: the transport mangles very long single lines and the code that
+# arrives on the VM is corrupted (observed with a 246 KB script whose payload
+# was one 243 KB line: the VM raised "Expecting value: line 1 column 1").
+MAX_INLINE_SCRIPT_BYTES = 64 * 1024
+MAX_INLINE_SCRIPT_LINE = 16 * 1024
+
+
+def _script_needs_file_transfer(path: str) -> bool:
+    """True when the script is too big (or has a line too long) to inline."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False
+    if size > MAX_INLINE_SCRIPT_BYTES:
+        return True
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if len(line) > MAX_INLINE_SCRIPT_LINE:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _read_script_for_exec(path: str, session_state) -> str:
+    """The code to send for `-f <path>`.
+
+    Ordinary scripts are read and sent as one cell. A script that is too big
+    or has a very long line is instead placed on the VM as a file and run
+    from there, because the inline transport corrupts it.
+    """
+    if not _script_needs_file_transfer(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    from colab_cli.contents import ContentsClient
+
+    remote = "content/_colab_exec_script.py"
+    ContentsClient(session_state).upload(path, "/" + remote)
+    typer.echo(
+        f"[colab] '{os.path.basename(path)}' is too large to send inline; "
+        f"uploaded it to /{remote} and running it from there.",
+        err=True,
+    )
+    return (
+        "import runpy\n"
+        f"runpy.run_path('/{remote}', run_name='__main__')\n"
+    )
+
+
 def exec_command(
     session: Annotated[
         Optional[str], typer.Option("-s", "--session", help="Session name")
@@ -312,8 +364,9 @@ def exec_command(
                             {"code": cell.source, "id": cell.id, "cell": cell}
                         )
         else:
-            with open(file, "r", encoding="utf-8") as f:
-                code_blocks.append({"code": f.read(), "id": None})
+            code_blocks.append(
+                {"code": _read_script_for_exec(file, s), "id": None}
+            )
     else:
         if is_stdin_tty():
             typer.echo("[colab] Error: No input provided. Pipe code or provide a file.")
