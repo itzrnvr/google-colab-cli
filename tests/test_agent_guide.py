@@ -133,4 +133,4 @@ def test_help_points_at_the_guide():
     result = runner.invoke(app, ["help"])
     assert result.exit_code == 0
     assert "agent-guide" in result.stderr + result.stdout
-    assert "colab doctor" in result.stderr + result.stdout
+    assert "colab-tool doctor" in result.stderr + result.stdout

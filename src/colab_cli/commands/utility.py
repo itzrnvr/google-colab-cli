@@ -55,7 +55,7 @@ def url(
             help=(
                 "After printing the URL, also open it in the system browser. "
                 "Off by default so the command remains pipeable "
-                "(e.g. `colab url -s s1 | xclip`)."
+                "(e.g. `colab-tool url -s s1 | xclip`)."
             ),
         ),
     ] = False,
@@ -118,7 +118,7 @@ def url(
     )
 
     # Print the URL on its own line with no `[colab]` prefix so the output
-    # is pipeable (`colab url -s s1 | xclip`, etc.).
+    # is pipeable (`colab-tool url -s s1 | xclip`, etc.).
     typer.echo(connect_url)
 
     if open_browser:
@@ -260,7 +260,7 @@ def whoami():
     expected.
 
     Hidden from `colab --help` because end users shouldn't need it; reach
-    it via `colab whoami --help` or by knowing the name.
+    it via `colab-tool whoami --help` or by knowing the name.
     """
     import json
     import urllib.error
@@ -537,7 +537,7 @@ def register(app: typer.Typer):
     app.command(name="version")(version_command)
     app.command(name="update")(update_command)
     # Developer-only debugging aid; hidden from `colab --help` but still
-    # reachable via `colab whoami` / `colab whoami --help`.
+    # reachable via `colab-tool whoami` / `colab-tool whoami --help`.
     app.command(name="whoami", hidden=True)(whoami)
     app.command(name="readme")(readme)
     app.command(name="README", hidden=True)(readme)

@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-`colab run <script.py> [args...]` — shebang-friendly one-shot execution.
+`colab-tool run <script.py> [args...]` — shebang-friendly one-shot execution.
 
-Combines `colab new` + `colab exec` + `colab stop` into a single fire-and-forget
+Combines `colab-tool new` + `colab-tool exec` + `colab-tool stop` into a single fire-and-forget
 invocation. The Python script's body runs in a freshly-allocated Colab kernel
 with `sys.argv` set as if it had been invoked via `python script.py [args...]`,
 and the VM is automatically released when the script finishes (unless `--keep`
@@ -23,7 +23,7 @@ is passed).
 
 Designed to support shebangs:
 
-    #!/usr/bin/env -S colab run --gpu T4
+    #!/usr/bin/env -S colab-tool run --gpu T4
     import torch
     print(torch.cuda.get_device_name(0))
 
@@ -66,7 +66,7 @@ def _build_script_payload(
       - Requested `--env KEY=VALUE` pairs are written into `os.environ`.
       - Suppress the IPython UserWarning "To exit: use 'exit', 'quit', or
         Ctrl-D." which fires whenever the script calls `sys.exit(...)`. This
-        warning is meaningful in an interactive REPL, but for `colab run` it
+        warning is meaningful in an interactive REPL, but for `colab-tool run` it
         is pure noise that doesn't appear when running `python script.py`.
 
     The script body is appended verbatim; the prelude is short so any
@@ -95,10 +95,10 @@ def _extract_env_args_from_script_args(
 ) -> tuple[List[str], List[str]]:
     """Pull colab's --env options out of variadic script args.
 
-    `colab run` intentionally forwards unknown options after the script path to
+    `colab-tool run` intentionally forwards unknown options after the script path to
     the user's script. Since `--env` is now a colab option, support both
-    `colab run --env KEY=VALUE script.py` (Typer parses this) and
-    `colab run script.py --env KEY=VALUE` (this helper parses it).
+    `colab-tool run --env KEY=VALUE script.py` (Typer parses this) and
+    `colab-tool run script.py --env KEY=VALUE` (this helper parses it).
     """
     forwarded_args = []
     env = []
@@ -221,7 +221,7 @@ def run_command(
             "--session",
             help=(
                 "Name for the ephemeral session (auto-generated if omitted). "
-                "Useful with --keep so you can attach later via `colab exec -s <name>`."
+                "Useful with --keep so you can attach later via `colab-tool exec -s <name>`."
             ),
         ),
     ] = None,
@@ -254,7 +254,7 @@ def run_command(
             "--keep",
             help=(
                 "Do not stop the session after the script finishes. The session "
-                "remains in `colab sessions` until you run `colab stop`."
+                "remains in `colab-tool sessions` until you run `colab-tool stop`."
             ),
         ),
     ] = False,
@@ -315,7 +315,7 @@ def run_command(
 
     Designed to be used as a shebang interpreter, e.g.
 
-        #!/usr/bin/env -S colab run --gpu T4
+        #!/usr/bin/env -S colab-tool run --gpu T4
 
     so a single executable .py file can rent a GPU, run, and clean up after
     itself.
@@ -324,7 +324,7 @@ def run_command(
     message as it arrives (instant failure signal), --errors-only keeps
     just failures, --json appends a final result envelope. Exit code
     follows CPython conventions (uncaught exception -> 1, sys.exit(N)
-    -> N). See `colab agent-guide`.
+    -> N). See `colab-tool agent-guide`.
     """
     from colab_cli.common import state
 
@@ -356,17 +356,17 @@ def run_command(
             uuid.uuid4(), variant=variant, accelerator=accelerator, shape=shape
         )
     except TooManyAssignmentsError:
-        # Mirror `colab new`'s friendly precondition-failed message.
+        # Mirror `colab-tool new`'s friendly precondition-failed message.
         typer.echo(
             "[colab] Allocation refused (precondition failed). This can mean "
             "too many active sessions, or a temporary usage or capacity "
-            "limit for the requested runtime. Run `colab stop` to free up a "
+            "limit for the requested runtime. Run `colab-tool stop` to free up a "
             "session, wait and retry, or try a different accelerator.",
             err=True,
         )
         raise typer.Exit(code=1)
     except ColabRequestError as e:
-        # Mirror `colab new`'s friendly accelerator-quota message.
+        # Mirror `colab-tool new`'s friendly accelerator-quota message.
         if get_status_code(e) == 400 and accelerator != Accelerator.NONE:
             typer.echo(
                 f"[colab] Backend rejected accelerator '{accelerator.value}'. "
@@ -444,7 +444,7 @@ def run_command(
     )
 
     try:
-        # Same /content prelude as `colab exec` for consistency.
+        # Same /content prelude as `colab-tool exec` for consistency.
         try:
             runtime.execute_code(
                 "import os; os.makedirs('/content', exist_ok=True); "
@@ -493,7 +493,7 @@ def run_command(
                 ref = {
                     "id": oid,
                     "bytes": raw_bytes,
-                    "fetch": f"colab output -s {name} {oid}",
+                    "fetch": f"colab-tool output -s {name} {oid}",
                 }
                 pair = (_compact(o), ref)
                 _refs[key] = pair

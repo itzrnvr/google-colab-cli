@@ -28,7 +28,7 @@ def test_resolve_session_no_local_sessions():
         with pytest.raises(typer.Exit):
             state.resolve_session(None)
         mock_echo.assert_any_call(
-            "[colab] Error: No active sessions found. Create one with 'colab new'.",
+            "[colab] Error: No active sessions found. Create one with 'colab-tool new'.",
             err=True,
         )
 
@@ -62,7 +62,7 @@ def test_resolve_session_with_local_but_none_on_server():
             f"{mock_echo.call_args_list}"
         )
         mock_echo.assert_any_call(
-            "[colab] Error: No active sessions found. Create one with 'colab new'.",
+            "[colab] Error: No active sessions found. Create one with 'colab-tool new'.",
             err=True,
         )
 

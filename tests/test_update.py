@@ -43,6 +43,9 @@ def fake_settings(mocker):
         kwargs = {
             "update_url": "http://test.url",
             "last_check": None,
+            # The check is off by default in this custom build; these tests
+            # exercise the banner mechanics, so they turn it on explicitly.
+            "enable_update_check": True,
             **overrides,
         }
         # Wrap the live object in a list so the inner closures can rebind it

@@ -193,10 +193,13 @@ def test_cli_status(mock_store, mock_common_state):
     assert "0.07/hr" not in result.output
     mock_store.get.assert_called_with("s1")
 
-    # Test with missing session
+    # Test with missing session: a named session that does not exist is a
+    # FAILURE, not an empty result. Exiting 0 here made every wrapper that
+    # checks the exit code (the Colab MCP server among them) believe the
+    # session was there.
     mock_store.get.return_value = None
     result = runner.invoke(app, ["status", "-s", "missing"])
-    assert result.exit_code == 0
+    assert result.exit_code == 1
     assert "Session 'missing' not found" in result.output
 
     # Test list all sessions: same unified format

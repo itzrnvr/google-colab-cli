@@ -123,7 +123,7 @@ class ColabRuntime:
                     # - git (googlecolab fork): ColabKernelClient(proxy_token=...)
                     # - PyPI <1.0: KernelClient(token=...)
                     # - PyPI >=1.0: JupyterKernelClient(token=...)
-                    #   (KernelClient was renamed, breaking `colab exec` with
+                    #   (KernelClient was renamed, breaking `colab-tool exec` with
                     #   AttributeError when installed from PyPI).
                     if hasattr(jupyter_kernel_client, "ColabKernelClient"):
                         _ClientCls = jupyter_kernel_client.ColabKernelClient
@@ -294,7 +294,7 @@ class ColabRuntime:
                     f"{description} {what} and the kernel did not acknowledge "
                     "the interrupt. The remote cell may still be running and "
                     "will keep consuming compute quota - stop the session "
-                    "(`colab stop -s <name>`) to release it."
+                    "(`colab-tool stop -s <name>`) to release it."
                 )
 
         if "error" in result:

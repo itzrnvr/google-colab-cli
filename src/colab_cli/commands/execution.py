@@ -240,7 +240,7 @@ def exec_command(
     message as it arrives (errors surface instantly, no re-polling), plus
     --errors-only to drop successful outputs and --max-output-chars to cap
     per-output size. --json appends a final {"event":"result",...} envelope.
-    See `colab agent-guide` for the full machine-interface contract.
+    See `colab-tool agent-guide` for the full machine-interface contract.
     """
     from colab_cli.common import state
 
@@ -289,12 +289,12 @@ def exec_command(
                 )
                 typer.echo(
                     "[colab] To run code that is already on the VM, pipe it "
-                    f"in instead:  cat {file} | colab exec -s {name}",
+                    f"in instead:  cat {file} | colab-tool exec -s {name}",
                     err=True,
                 )
             typer.echo(
                 "[colab] Pass a path that exists here, or upload the file "
-                "first with `colab upload`.",
+                "first with `colab-tool upload`.",
                 err=True,
             )
             raise typer.Exit(code=2)
@@ -400,7 +400,7 @@ def exec_command(
                 output rides inline with no ref. Over it, the FULL output
                 is persisted via history and the event carries a compacted
                 preview plus {"id", "bytes", "fetch"} to pull the whole thing
-                with `colab output -s NAME ID`. Nothing is hidden — large
+                with `colab-tool output -s NAME ID`. Nothing is hidden — large
                 content is one fetch away instead of inline.
                 """
                 key = id(o)
@@ -415,7 +415,7 @@ def exec_command(
                 ref = {
                     "id": oid,
                     "bytes": raw_bytes,
-                    "fetch": f"colab output -s {name} {oid}",
+                    "fetch": f"colab-tool output -s {name} {oid}",
                 }
                 pair = (_compact(o), ref)
                 _refs[key] = pair
@@ -502,7 +502,7 @@ def exec_command(
             with open(output_file, "w", encoding="utf-8") as f:
                 nbformat.write(nb, f)
     # A failed cell must fail the command: wrappers key on exit code, and
-    # previously `colab exec` always exited 0 even on kernel exceptions.
+    # previously `colab-tool exec` always exited 0 even on kernel exceptions.
     if exec_exit != 0:
         raise typer.Exit(exec_exit)
 

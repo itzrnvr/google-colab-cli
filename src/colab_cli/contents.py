@@ -78,8 +78,8 @@ class ContentsClient:
                 f"File or directory not found: {path}{detail}. Either the "
                 "path is wrong (remote paths are relative to the notebook "
                 "root, e.g. 'content/model.json' rather than 'model.json') or "
-                "the runtime is gone -- check `colab status -s <session>` and "
-                "`colab sessions`."
+                "the runtime is gone -- check `colab-tool status -s <session>` and "
+                "`colab-tool sessions`."
             )
 
         response.raise_for_status()

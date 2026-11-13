@@ -42,7 +42,7 @@ class AlphabeticalGroup(TyperGroup):
 
     Subcommands are registered in functional groups (session, execution, files,
     automation, utility), but users discovering the CLI via `colab --help` /
-    `colab help` benefit from a deterministic, alphabetical listing.
+    `colab-tool help` benefit from a deterministic, alphabetical listing.
     """
 
     def list_commands(self, ctx: click.Context) -> list[str]:
@@ -55,9 +55,9 @@ app = typer.Typer(
         "stock upstream package.\n\n"
         "Rents Colab VMs and runs code on them, with extras the upstream CLI "
         "does not have: multiple signed-in Google accounts with automatic "
-        "quota failover, `colab doctor` (one command that says what is broken "
+        "quota failover, `colab-tool doctor` (one command that says what is broken "
         "and how to fix it), machine-readable output that keeps stdout "
-        "parseable, and `colab agent-guide`, which can hand itself over as "
+        "parseable, and `colab-tool agent-guide`, which can hand itself over as "
         "skill data.\n\n"
         "Humans: `colab-tool new`, `colab-tool exec -f job.py`, "
         "`colab-tool stop`.\n"
@@ -108,7 +108,7 @@ def callback(
             "--account",
             help=(
                 "Which signed-in Google account to use for this command. "
-                "Use `colab account list` to see the stored accounts. "
+                "Use `colab-tool account list` to see the stored accounts. "
                 "Defaults to the active account."
             ),
         ),
@@ -137,7 +137,7 @@ def callback(
     # output stays clean and machine-parseable:
     #   - `update`: runs its own check + announce; would duplicate the banner.
     #   - `version`, `log`, `pay`, `help`, `url`: pure-display commands whose
-    #     output users routinely pipe / scrape (e.g. `colab url -s s1 | xclip`);
+    #     output users routinely pipe / scrape (e.g. `colab-tool url -s s1 | xclip`);
     #     a stochastic upgrade banner injected once a day would corrupt those
     #     pipelines.
     #   - `whoami`: developer-only debugging tool; banner would obscure the

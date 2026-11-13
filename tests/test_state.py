@@ -132,7 +132,7 @@ def test_state_store_concurrency(temp_config):
 def test_settings_store_defaults(temp_config):
     store = SettingsStore(temp_config)
     settings = store.load()
-    assert settings.enable_update_check is True
+    assert settings.enable_update_check is False
     assert settings.last_check is None
 
 

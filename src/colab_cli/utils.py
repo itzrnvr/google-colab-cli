@@ -54,7 +54,7 @@ def print_kitty(image_bytes: bytes):
 
     No-op when stdout is not a TTY: the escape sequence is meaningless to a
     file/pipe and visually corrupts captured output (e.g. when piping
-    `colab exec` into a shell tool, redirecting to a log file, or running
+    `colab-tool exec` into a shell tool, redirecting to a log file, or running
     under non-Kitty terminals). Callers still get the image via
     `handle_image`'s file-write path.
     """

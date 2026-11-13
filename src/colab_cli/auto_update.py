@@ -18,7 +18,7 @@ Owns version detection, the PyPI-style update probe, the on-disk
 ``latest_version`` cache, and the upgrade-banner UX. The CLI's global
 callback (``cli.py``) calls ``check_for_updates`` once per day and
 ``maybe_show_cached_banner`` on every other invocation; the
-``colab update`` Typer command (``commands/utility.py``) delegates to
+``colab-tool update`` Typer command (``commands/utility.py``) delegates to
 ``check_for_updates``.
 """
 
@@ -133,12 +133,12 @@ def announce_upgrade(
     ``show_disable_hint`` controls whether the trailing line that explains
     how to silence the auto-check is included. It is only added when the
     banner is shown unsolicited (the daily background fetch and the cached
-    banner on subsequent invocations); explicit ``colab update`` calls
+    banner on subsequent invocations); explicit ``colab-tool update`` calls
     omit it because the user already opted in to seeing the result.
 
     ``err`` sends the banner to stderr. The unsolicited background banner uses
     this so that stdout stays machine-parseable: an agent piping
-    ``colab exec --json`` into a JSON parser must not have an upgrade notice
+    ``colab-tool exec --json`` into a JSON parser must not have an upgrade notice
     injected into the stream.
     """
     typer.echo(
@@ -196,7 +196,7 @@ def check_for_updates(quiet: bool = False) -> None:
     """Check PyPI for updates and print a message if a new version is available.
 
     The disable-hint is appended to the banner only when ``quiet`` is True
-    (the daily background fetch); explicit ``colab update`` invocations
+    (the daily background fetch); explicit ``colab-tool update`` invocations
     (``quiet=False``) omit it because the user asked for the check.
     """
     settings = state.settings_store.load()
@@ -247,7 +247,7 @@ def maybe_show_cached_banner(settings: Settings) -> None:
     """Print the cached upgrade banner if the cache reports a newer version.
 
     Called from the global CLI callback when the daily fetch is throttled.
-    The banner uses a generic ``colab update`` install hint because the
+    The banner uses a generic ``colab-tool update`` install hint because the
     cache does not record which source supplied the version; the disable
     hint is shown because this is unsolicited output.
     """
@@ -259,7 +259,7 @@ def maybe_show_cached_banner(settings: Settings) -> None:
     announce_upgrade(
         settings.latest_version,
         current,
-        "colab update",
+        "colab-tool update",
         show_disable_hint=True,
         err=True,
     )

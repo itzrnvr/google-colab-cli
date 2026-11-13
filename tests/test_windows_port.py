@@ -375,7 +375,7 @@ def test_large_output_gets_ref_and_fetch_roundtrips(
     assert "ref" in streamed, "over-cap output must carry a fetch ref"
     ref = streamed["ref"]
     assert ref["bytes"] > 2000
-    assert ref["fetch"] == f"colab output -s s1 {ref['id']}"
+    assert ref["fetch"] == f"colab-tool output -s s1 {ref['id']}"
     # The envelope shares the SAME id (no double-store).
     envelope = events[-1]
     cell_out = envelope["cells"][0]["outputs"][0]

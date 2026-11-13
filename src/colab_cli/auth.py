@@ -119,7 +119,7 @@ def _decode_jwt_claims(token: str) -> dict:
 def resolve_account_email(creds: Credentials) -> Optional[str]:
     """Best-effort lookup of the signed-in Google account's email address.
 
-    Used to label accounts so ``colab account list`` can show which Google
+    Used to label accounts so ``colab-tool account list`` can show which Google
     account a token belongs to. Prefers the ``email`` claim in the OIDC
     ``id_token``; falls back to the OAuth2 userinfo endpoint.
     """
@@ -259,7 +259,7 @@ def resolve_stored_account_email(
 ) -> Optional[str]:
     """Look up (and cache) the Google account email behind a stored token.
 
-    Used by ``colab account list`` so accounts can be told apart. Resolving
+    Used by ``colab-tool account list`` so accounts can be told apart. Resolving
     the email needs a network call, so it is done on demand rather than on
     every credential load.
     """

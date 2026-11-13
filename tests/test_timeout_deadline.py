@@ -106,7 +106,7 @@ def test_deadline_message_names_the_session_teardown():
             rt._run_with_deadline(lambda: release.wait(30), 0.5, "Code execution")
     finally:
         release.set()
-    assert "colab stop" in str(exc.value)
+    assert "colab-tool stop" in str(exc.value)
 
 
 def test_execute_code_uses_the_deadline(mocker):

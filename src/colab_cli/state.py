@@ -37,7 +37,7 @@ class SessionState(BaseModel):
     running: Optional[str] = None
     # Which signed-in Google account owns this runtime. Sessions live under
     # different accounts when the CLI rotates to a fresh one (see
-    # `colab account`), and the runtime must be looked up under the account
+    # `colab-tool account`), and the runtime must be looked up under the account
     # that created it or it looks "missing" and gets pruned.
     account: Optional[str] = None
 
@@ -45,7 +45,12 @@ class SessionState(BaseModel):
 class Settings(BaseModel):
     update_url: str = "https://pypi.org/pypi/google-colab-cli/json"
     last_check: Optional[datetime] = None
-    enable_update_check: bool = True
+    # Off by default for this custom build: the version it compares against
+    # is the UPSTREAM package's, and that release must never be installed
+    # over this build. The notice was pure noise on every command (and it
+    # polluted the output of every MCP tool call). `colab-tool update` still
+    # works on demand.
+    enable_update_check: bool = False
     # Highest version seen on the update source; cached for the banner.
     latest_version: Optional[str] = None
 

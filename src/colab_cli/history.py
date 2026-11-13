@@ -44,7 +44,7 @@ class HistoryLogger:
 
         IDs are per-session monotonically increasing (`o1`, `o2`, ...) and
         survive process restarts (count derived from the existing file), so
-        a wrapper can `colab output -s NAME o7` in a later command.
+        a wrapper can `colab-tool output -s NAME o7` in a later command.
         """
         path = self._get_outputs_path(session_name)
         seq = 0

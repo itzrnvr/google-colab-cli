@@ -149,7 +149,7 @@ def _resolve_session(name: Optional[str]) -> SessionState:
     if not s:
         typer.echo(
             f"[colab] session '{resolved}' not found. "
-            "Run `colab sessions` to list active sessions.",
+            "Run `colab-tool sessions` to list active sessions.",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -182,9 +182,9 @@ def _auto_create_session(
     *,
     high_mem: bool = False,
 ) -> SessionState:
-    """Creates a runtime via ``colab new`` and returns its session.
+    """Creates a runtime via ``colab-tool new`` and returns its session.
 
-    Reuses ``colab new``'s creation path verbatim so the two commands cannot drift.
+    Reuses ``colab-tool new``'s creation path verbatim so the two commands cannot drift.
 
     Args:
       gpu: GPU accelerator to request, or None for CPU.
@@ -203,7 +203,7 @@ def _auto_create_session(
 
 
 def _stop_session(name: str) -> None:
-    """Best-effort ``colab stop`` for a session (used by ``--rm``)."""
+    """Best-effort ``colab-tool stop`` for a session (used by ``--rm``)."""
     from colab_cli.commands import session as session_cmd
 
     try:
@@ -258,7 +258,7 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
         case 401:
             message = (
                 "Authentication failed (HTTP 401): the runtime-proxy token "
-                "is invalid. The session may have expired - try `colab new`."
+                "is invalid. The session may have expired - try `colab-tool new`."
             )
         case 403:
             message = (
@@ -271,7 +271,7 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
                 "Endpoint not found (HTTP 404): this runtime does not expose "
                 "the /colab/ssh endpoint. SSH is enabled at runtime creation, "
                 "so an older or non-SSH runtime will not have it - run "
-                "`colab new` for a fresh runtime with SSH."
+                "`colab-tool new` for a fresh runtime with SSH."
             )
         case 429:
             message = (
@@ -282,7 +282,7 @@ def _explain_handshake_failure(status: Optional[int], body: bytes) -> str:
             message = (
                 "Bad gateway (HTTP 502): the runtime's local sshd is "
                 "unreachable. The runtime may be unhealthy; try `colab "
-                "status`, then `colab stop` + `colab new`."
+                "status`, then `colab-tool stop` + `colab-tool new`."
             )
         case None:
             message = (
@@ -328,7 +328,7 @@ def _connect_websocket(url: str, pubkey: str) -> websocket.WebSocket:
     ) as e:
         typer.echo(
             f"[colab] WebSocket connection failed: {e}. Check your network "
-            "and that the runtime is healthy (`colab status`).",
+            "and that the runtime is healthy (`colab-tool status`).",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -500,7 +500,7 @@ def _select_interactive_session(
     """Resolves (or auto-creates) the session for an interactive shell.
 
     Bare ``colab ssh`` with an empty store auto-creates a runtime (like
-    ``colab new``); otherwise the named or single active session is resolved.
+    ``colab-tool new``); otherwise the named or single active session is resolved.
 
     Args:
       session: The requested session name, or None.
@@ -697,7 +697,7 @@ def ssh(
     """Connect to a Colab runtime via SSH.
 
     Bare ``colab ssh`` uses your only active session, or auto-creates one (like
-    ``colab new``) if you have none, and opens a shell in ``/content``. With
+    ``colab-tool new``) if you have none, and opens a shell in ``/content``. With
     --proxy-mode it is a ProxyCommand-compatible WebSocket-stdio bridge; every
     flag above still applies (``-s NAME`` creates the session if missing,
     ``--gpu/--tpu`` set its accelerator, ``--rm`` stops it on disconnect).

@@ -172,7 +172,7 @@ class State:
             typer.echo(
                 f"[colab] Session '{name}' not found. It is unknown locally "
                 "or its runtime is gone. List what is running with "
-                "`colab sessions`, or create one with `colab new -s <name>`.",
+                "`colab-tool sessions`, or create one with `colab-tool new -s <name>`.",
                 err=True,
             )
             raise typer.Exit(1)
@@ -198,11 +198,11 @@ class State:
             return self._sessions, self.client.list_assignments()
 
         # Check local store first. If it's empty, we don't necessarily need to hit the backend
-        # unless we are specifically looking for server-side assignments (e.g. 'colab sessions').
+        # unless we are specifically looking for server-side assignments (e.g. 'colab-tool sessions').
         local_sessions = self.store.list()
         if not local_sessions:
             self._sessions = {}
-            # We still need to return assignments for 'colab sessions' to work
+            # We still need to return assignments for 'colab-tool sessions' to work
             # But we only trigger client creation (and thus auth) if we have to.
             try:
                 assignments = self.client.list_assignments()
@@ -245,7 +245,7 @@ class State:
                 f"[colab] Notice: {pruned} session(s) were pruned because "
                 "their runtime is gone (Colab reclaims idle VMs). Any work "
                 "that was running there is lost. Create a new one with "
-                "`colab new -s <name> --gpu T4`.",
+                "`colab-tool new -s <name> --gpu T4`.",
                 err=True,
             )
 
@@ -259,7 +259,7 @@ class State:
         local_sessions = self.store.list()
         if not local_sessions:
             typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'.",
+                "[colab] Error: No active sessions found. Create one with 'colab-tool new'.",
                 err=True,
             )
             raise typer.Exit(1)
@@ -281,7 +281,7 @@ class State:
             raise typer.Exit(1)
         else:
             typer.echo(
-                "[colab] Error: No active sessions found. Create one with 'colab new'.",
+                "[colab] Error: No active sessions found. Create one with 'colab-tool new'.",
                 err=True,
             )
             raise typer.Exit(1)

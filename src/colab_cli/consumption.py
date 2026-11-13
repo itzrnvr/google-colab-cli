@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Account-level compute-unit display for `colab usage`."""
+"""Account-level compute-unit display for `colab-tool usage`."""
 
 from pydantic import BaseModel, ConfigDict, Field
 

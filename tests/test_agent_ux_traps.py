@@ -58,7 +58,7 @@ def test_exec_with_a_remote_path_explains_that_f_is_local(
     assert "does not exist on this machine" in result.stderr
     assert "LOCALLY" in result.stderr
     # It must point at the working alternative.
-    assert "cat /content/train.py | colab exec" in result.stderr
+    assert "cat /content/train.py | colab-tool exec" in result.stderr
 
 
 def test_exec_with_a_missing_local_path_still_reports_the_path(
@@ -100,7 +100,7 @@ def test_contents_404_mentions_both_causes(mocker):
     assert "File or directory not found: content" in message
     # The agent needs to know the runtime may be gone, not just the path.
     assert "runtime" in message
-    assert "colab status" in message
+    assert "colab-tool status" in message
 
 
 def test_contents_404_includes_the_backend_detail(mocker):

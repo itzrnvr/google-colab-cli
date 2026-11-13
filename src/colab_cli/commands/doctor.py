@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``colab doctor`` -- one command that says whether the CLI can work, and if
+"""``colab-tool doctor`` -- one command that says whether the CLI can work, and if
 not, exactly what to do about it.
 
 An agent that is about to rent a GPU should not have to discover its own
@@ -138,7 +138,7 @@ def _check_accounts() -> List[Check]:
                 "accounts",
                 FAIL,
                 "no Google account is signed in",
-                "Run: colab account add default",
+                "Run: colab-tool account add default",
             )
         )
         return out
@@ -170,8 +170,8 @@ def _check_accounts() -> List[Check]:
                 WARN,
                 "only one account is signed in, so a quota refusal has "
                 "nowhere to rotate to",
-                "Run: colab account add backup   (a second account means "
-                "'colab new' can recover from a spent quota)",
+                "Run: colab-tool account add backup   (a second account means "
+                "'colab-tool new' can recover from a spent quota)",
             )
         )
     return out
@@ -189,9 +189,9 @@ def _check_auth() -> List[Check]:
                 "backend auth",
                 FAIL,
                 f"could not list assignments: {e}",
-                "Run: colab whoami   (it prints the active identity and "
+                "Run: colab-tool whoami   (it prints the active identity and "
                 "scopes). If it 401s, re-mint the token with "
-                "'colab account add default'.",
+                "'colab-tool account add default'.",
             )
         ]
     return [
@@ -296,7 +296,7 @@ def doctor(
         typer.echo("")
         return
 
-    typer.echo("READY. You can rent a runtime: colab new -s <name> --gpu T4")
+    typer.echo("READY. You can rent a runtime: colab-tool new -s <name> --gpu T4")
     typer.echo("")
 
 

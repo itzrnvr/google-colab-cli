@@ -16,7 +16,7 @@
 
 Colab enforces *per-Google-account* limits: a daily compute quota and a
 concurrency limit on GPU assignments. When one account's quota is exhausted,
-every ``colab new --gpu T4`` fails with HTTP 412 (``Precondition Failed``)
+every ``colab-tool new --gpu T4`` fails with HTTP 412 (``Precondition Failed``)
 even though other signed-in accounts still have headroom.
 
 This module stores one OAuth token per labelled account so a machine (or an
@@ -191,7 +191,7 @@ class AccountStore:
         if not self.has(label):
             raise AccountError(
                 f"Account '{label}' has no stored token. Run "
-                f"`colab account add {label}` to sign in first."
+                f"`colab-tool account add {label}` to sign in first."
             )
         index = self._load_index()
         index["active"] = label

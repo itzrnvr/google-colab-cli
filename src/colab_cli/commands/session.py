@@ -310,7 +310,7 @@ def new(
         typer.echo(
             "[colab] Allocation refused (precondition failed). This can mean "
             "too many active sessions, or a temporary usage or capacity "
-            "limit for the requested runtime. Run `colab stop` to free up a "
+            "limit for the requested runtime. Run `colab-tool stop` to free up a "
             "session, wait and retry, or try a different accelerator.",
             err=True,
         )
@@ -567,7 +567,19 @@ def status(
             else:
                 _print_status_for(s)
         else:
-            typer.echo(f"[colab] Session '{session}' not found.", err=True)
+            # A named session that does not exist is a FAILURE, not an empty
+            # result: exiting 0 here makes every wrapper that checks the
+            # exit code (the Colab MCP server among them) believe the session
+            # is there. That is how "Session 'x' already exists" was followed
+            # by "Session 'x' not found" on every subsequent command.
+            typer.echo(
+                f"[colab] Session '{session}' not found. It is unknown locally "
+                "or its runtime is gone. List what is running with "
+                "`colab-tool sessions`, or create one with "
+                "`colab-tool new -s <name>`.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
         return
 
     if not local_sessions:

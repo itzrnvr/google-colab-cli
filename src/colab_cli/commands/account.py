@@ -12,19 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""``colab account`` — manage multiple signed-in Google accounts.
+"""``colab-tool account`` — manage multiple signed-in Google accounts.
 
 Colab applies per-account limits (daily compute quota, concurrent GPU
-assignments). When one account is exhausted, ``colab new --gpu T4`` fails with
+assignments). When one account is exhausted, ``colab-tool new --gpu T4`` fails with
 HTTP 412 even though another signed-in account still has headroom. These
 commands let several accounts be signed in side by side so the CLI (or an
 agent driving it) can rotate to a healthy one.
 
-    colab account list                # show stored accounts + active one
-    colab account add work            # sign in an additional account
-    colab account use work            # make it the active account
-    colab account rm work             # forget it
-    colab account current             # print the active label
+    colab-tool account list                # show stored accounts + active one
+    colab-tool account add work            # sign in an additional account
+    colab-tool account use work            # make it the active account
+    colab-tool account rm work             # forget it
+    colab-tool account current             # print the active label
 """
 
 from typing import Annotated, Optional
@@ -95,7 +95,7 @@ def list_accounts(
 
     if not rows:
         typer.echo(
-            "No accounts signed in. Run `colab account add <label>` to sign in.",
+            "No accounts signed in. Run `colab-tool account add <label>` to sign in.",
             err=True,
         )
         return
@@ -109,8 +109,8 @@ def list_accounts(
     typer.echo("")
     typer.echo(
         f"Active: {active or '(none)'}   "
-        "(use `colab account use <label>` to switch, "
-        "or `colab --account <label>` for a single command)"
+        "(use `colab-tool account use <label>` to switch, "
+        "or `colab-tool --account <label>` for a single command)"
     )
 
 
@@ -157,7 +157,7 @@ def add_account(
         store.set_active(label)
     typer.echo(f"[colab] Signed in '{label}' ({email or 'unknown account'}).")
     if not use:
-        typer.echo(f"[colab] Activate it later with `colab account use {label}`.")
+        typer.echo(f"[colab] Activate it later with `colab-tool account use {label}`.")
 
 
 @app.command(name="use")
