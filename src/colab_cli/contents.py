@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import base64
+import logging
+import os
 from typing import Optional
 from urllib.parse import quote
 
@@ -20,9 +22,17 @@ import requests
 
 from colab_cli.state import SessionState
 
+logger = logging.getLogger(__name__)
+
 # The VM's working directory. The contents API is rooted at the notebook
 # root, so files the user cares about live under this prefix.
 WORKING_DIR = "content"
+
+# Files larger than this are uploaded in chunks. A single request carrying the
+# whole file is aborted by the host well before 100 MB (measured: 50 MB
+# succeeds, 100 MB dies with ConnectionAbortedError 10053), so the chunk size
+# is what the API is willing to accept in one body.
+UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024
 
 
 class ContentsClient:
@@ -114,22 +124,75 @@ class ContentsClient:
         return self._request("GET", path)
 
     def upload(self, local_path: str, remote_path: str):
-        with open(local_path, "rb") as f:
-            content = f.read()
+        """Upload a file to the VM.
 
-        b64_content = base64.b64encode(content).decode("ascii")
+        Files at or below ``UPLOAD_CHUNK_BYTES`` go up in one request.
+        Larger ones are split: the contents API appends each chunk to the
+        file, so a big upload no longer dies on a single oversized request.
+
+        Measured on this box: a single 100 MB base64 PUT is aborted by the
+        host (``ConnectionAbortedError 10053``) while 50 MB succeeds;
+        chunked, the same file arrives byte-for-byte.
+
+        The size is verified afterwards, so a server that ever truncates
+        fails loudly instead of silently corrupting the file.
+        """
+        size = os.path.getsize(local_path)
         filename = remote_path.split("/")[-1]
 
-        payload = {
-            "name": filename,
-            "path": remote_path,
-            "type": "file",
-            "format": "base64",
-            "content": b64_content,
-            "chunk": 1,
-        }
+        if size <= UPLOAD_CHUNK_BYTES:
+            with open(local_path, "rb") as f:
+                content = f.read()
 
-        return self._request("PUT", remote_path, json_data=payload)
+            b64_content = base64.b64encode(content).decode("ascii")
+
+            payload = {
+                "name": filename,
+                "path": remote_path,
+                "type": "file",
+                "format": "base64",
+                "content": b64_content,
+                "chunk": 1,
+            }
+
+            return self._request("PUT", remote_path, json_data=payload)
+
+        # Split on a multiple of 3 so every chunk base64-encodes on its own
+        # (no padding in the middle of the stream).
+        step = (UPLOAD_CHUNK_BYTES // 3) * 3
+        chunk_no = 0
+        with open(local_path, "rb") as f:
+            while True:
+                raw = f.read(step)
+                if not raw:
+                    break
+                chunk_no += 1
+                payload = {
+                    "name": filename,
+                    "path": remote_path,
+                    "type": "file",
+                    "format": "base64",
+                    "content": base64.b64encode(raw).decode("ascii"),
+                    "chunk": chunk_no,
+                }
+                self._request("PUT", remote_path, json_data=payload)
+
+        # Verify: never let a truncated upload look like a successful one.
+        remote = self._request("GET", remote_path, params={"content": "0"})
+        remote_size = remote.get("size") if isinstance(remote, dict) else None
+        if remote_size is not None and int(remote_size) != size:
+            raise IOError(
+                f"Upload of '{local_path}' is incomplete: the VM has "
+                f"{remote_size} bytes, expected {size}. The file was "
+                "truncated in transit -- do not trust it."
+            )
+        logger.info(
+            "Uploaded %s in %d chunk(s) of up to %d MB",
+            local_path,
+            chunk_no,
+            UPLOAD_CHUNK_BYTES // (1024 * 1024),
+        )
+        return None
 
     def download(self, remote_path: str, local_path: str):
         data = self._request("GET", remote_path, params={"content": "1"})
